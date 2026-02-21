@@ -25,6 +25,8 @@
 package com.groupfinder;
 
 import com.google.inject.Provides;
+import java.awt.Canvas;
+import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -32,10 +34,21 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
+import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
+import net.runelite.api.FriendsChatManager;
+import net.runelite.api.GameState;
+import net.runelite.api.widgets.Widget;
 import net.runelite.api.Player;
+import net.runelite.api.events.FriendsChatChanged;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -52,6 +65,9 @@ public class GroupFinderPlugin extends Plugin
 	private Client client;
 
 	@Inject
+	private ClientThread clientThread;
+
+	@Inject
 	private GroupFinderConfig config;
 
 	@Inject
@@ -60,11 +76,16 @@ public class GroupFinderPlugin extends Plugin
 	@Inject
 	private GroupFinderClient groupFinderClient;
 
+	@Inject
+	private ChatMessageManager chatMessageManager;
+
 	private GroupFinderPanel panel;
 	private NavigationButton navButton;
 	private ScheduledExecutorService executorService;
 	private ScheduledFuture<?> pollFuture;
 	private Activity currentFilter;
+	private volatile boolean inFriendsChat;
+	private volatile Runnable fcStatusCallback;
 
 	@Override
 	protected void startUp() throws Exception
@@ -84,6 +105,8 @@ public class GroupFinderPlugin extends Plugin
 
 		executorService = Executors.newSingleThreadScheduledExecutor();
 		startPolling();
+
+		clientThread.invokeLater(() -> inFriendsChat = client.getFriendsChatManager() != null);
 
 		log.debug("Group Finder started");
 	}
@@ -151,7 +174,7 @@ public class GroupFinderPlugin extends Plugin
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null && localPlayer.getName() != null)
 		{
-			listing.setPlayerName(localPlayer.getName());
+			listing.setPlayerName(normalizeName(localPlayer.getName()));
 		}
 
 		if (listing.getPlayerName() == null || listing.getPlayerName().isEmpty())
@@ -159,6 +182,14 @@ public class GroupFinderPlugin extends Plugin
 			panel.showError("You must be logged in to create a group");
 			return;
 		}
+
+		FriendsChatManager fcm = client.getFriendsChatManager();
+		if (fcm == null)
+		{
+			panel.showError("Join a Friends Chat before creating a group");
+			return;
+		}
+		listing.setFriendsChatName(normalizeName(fcm.getOwner()));
 
 		executorService.execute(() ->
 		{
@@ -213,9 +244,119 @@ public class GroupFinderPlugin extends Plugin
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null && localPlayer.getName() != null)
 		{
-			return localPlayer.getName();
+			return normalizeName(localPlayer.getName());
 		}
 		return null;
+	}
+
+	private static String normalizeName(String name)
+	{
+		return name.replace('\u00A0', ' ');
+	}
+
+	void joinFriendsChat(String fcName)
+	{
+		log.debug("Attempting to join FC: {}", fcName);
+		if (fcName == null || fcName.isEmpty())
+		{
+			log.debug("FC name is empty, not joining");
+			return;
+		}
+		clientThread.invokeLater(() ->
+		{
+			if (client.getGameState() != GameState.LOGGED_IN)
+			{
+				log.debug("Not logged in, cannot join FC");
+				return;
+			}
+
+			// Widget 162,42 (Chatbox.MES_TEXT) is the text label shown in the
+			// "Enter channel name" dialog. If it's visible and contains the
+			// FC join prompt, the user has the dialog open already.
+			Widget chatboxTextWidget = client.getWidget(162, 42);
+			log.debug("Chatbox text widget: {}", chatboxTextWidget);
+
+			boolean dialogOpen = chatboxTextWidget != null
+				&& !chatboxTextWidget.isHidden()
+				&& chatboxTextWidget.getText() != null
+				&& chatboxTextWidget.getText().contains("Enter the player name");
+
+			log.debug(
+					"Dialog state: hidden={}, text={}",
+					chatboxTextWidget != null ? chatboxTextWidget.isHidden() : "null",
+					chatboxTextWidget != null ? chatboxTextWidget.getText() : "null"
+			);
+
+			if (dialogOpen)
+			{
+				log.debug("Joining FC: {}", fcName);
+				SwingUtilities.invokeLater(() ->
+				{
+					Canvas canvas = client.getCanvas();
+					long t = System.currentTimeMillis();
+					// Clear any stale text already in the input box (FC names are ≤12 chars)
+					for (int i = 0; i < 20; i++)
+					{
+						canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED,  t, 0, KeyEvent.VK_BACK_SPACE, '\b'));
+						canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED,    t, 0, 0,                      '\b'));
+						canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0, KeyEvent.VK_BACK_SPACE, '\b'));
+					}
+					// Type the FC name character by character
+					for (char c : fcName.toCharArray())
+					{
+						canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t, 0, 0, c));
+					}
+					// Submit
+					canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED,  t, 0, KeyEvent.VK_ENTER, '\n'));
+					canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED,    t, 0, 0,                 '\n'));
+					canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0, KeyEvent.VK_ENTER, '\n'));
+				});
+			}
+			else
+			{
+				log.debug("Join dialog not open, cannot join FC");
+				chatMessageManager.queue(QueuedMessage.builder()
+					.type(ChatMessageType.GAMEMESSAGE)
+					.value("Group Finder: Open the Friends Chat 'Join' dialog first, then click Join FC again.")
+					.build());
+			}
+		});
+	}
+
+	boolean isInFriendsChat()
+	{
+		return inFriendsChat;
+	}
+
+	void setFcStatusCallback(Runnable r)
+	{
+		fcStatusCallback = r;
+	}
+
+	@Subscribe
+	public void onFriendsChatChanged(FriendsChatChanged event)
+	{
+		inFriendsChat = event.isJoined();
+		Runnable cb = fcStatusCallback;
+		if (cb != null)
+		{
+			SwingUtilities.invokeLater(cb);
+		}
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() == GameState.LOGIN_SCREEN
+			|| event.getGameState() == GameState.HOPPING)
+		{
+			inFriendsChat = false;
+			Runnable cb = fcStatusCallback;
+			if (cb != null)
+			{
+				SwingUtilities.invokeLater(cb);
+			}
+		}
 	}
 
 	@Provides

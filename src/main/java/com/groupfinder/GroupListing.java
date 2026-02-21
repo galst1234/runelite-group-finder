@@ -35,9 +35,10 @@ public class GroupListing
 {
 	private String id;
 	private String playerName;
+	private String friendsChatName;
 	private Activity activity;
 	private int currentSize;
 	private int maxSize;
 	private String description;
-	private long createdAt;
+	private String createdAt;
 }

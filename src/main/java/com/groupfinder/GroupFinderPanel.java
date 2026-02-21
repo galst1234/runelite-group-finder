@@ -187,7 +187,7 @@ public class GroupFinderPanel extends PluginPanel
 			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.DARK_GRAY_COLOR),
 			new EmptyBorder(8, 8, 8, 8)
 		));
-		card.setMaximumSize(new Dimension(Integer.MAX_VALUE, isOwn ? 110 : 80));
+		card.setMaximumSize(new Dimension(Integer.MAX_VALUE, isOwn ? 110 : 105));
 
 		Color bgColor = isOwn ? ColorScheme.DARKER_GRAY_HOVER_COLOR : ColorScheme.DARKER_GRAY_COLOR;
 
@@ -209,7 +209,7 @@ public class GroupFinderPanel extends PluginPanel
 			JPanel sizePanel = new JPanel(new BorderLayout());
 			sizePanel.setBackground(bgColor);
 
-			JButton minusButton = new JButton("\u2212");
+			JButton minusButton = new JButton("−");
 			minusButton.setMargin(new java.awt.Insets(0, 4, 0, 4));
 			minusButton.setToolTipText("Remove a member");
 			minusButton.setEnabled(listing.getCurrentSize() > 1);
@@ -301,6 +301,17 @@ public class GroupFinderPanel extends PluginPanel
 				});
 			});
 			buttonPanel.add(copyButton);
+
+			JButton joinFcButton = new JButton("Join FC");
+			joinFcButton.setPreferredSize(new Dimension(90, 25));
+			joinFcButton.setMaximumSize(new Dimension(90, 25));
+			String fcName = listing.getFriendsChatName();
+			joinFcButton.setToolTipText(fcName != null && !fcName.isEmpty()
+				? "Join " + fcName + "'s Friends Chat"
+				: "No Friends Chat name available");
+			joinFcButton.setEnabled(fcName != null && !fcName.isEmpty());
+			joinFcButton.addActionListener(e -> plugin.joinFriendsChat(fcName));
+			buttonPanel.add(joinFcButton);
 		}
 
 		card.add(buttonPanel, BorderLayout.EAST);
@@ -310,6 +321,12 @@ public class GroupFinderPanel extends PluginPanel
 
 	private void showCreateDialog()
 	{
+		JLabel fcWarningLabel = new JLabel("⚠ You are not in a Friends Chat. Join one first!");
+		fcWarningLabel.setForeground(new Color(255, 180, 0));
+		fcWarningLabel.setVisible(!plugin.isInFriendsChat());
+
+		plugin.setFcStatusCallback(() -> fcWarningLabel.setVisible(!plugin.isInFriendsChat()));
+
 		JPanel formPanel = new JPanel(new GridLayout(4, 2, 5, 5));
 
 		formPanel.add(new JLabel("Activity:"));
@@ -328,13 +345,20 @@ public class GroupFinderPanel extends PluginPanel
 		JTextField descField = new JTextField();
 		formPanel.add(descField);
 
+		JPanel wrapperPanel = new JPanel();
+		wrapperPanel.setLayout(new BoxLayout(wrapperPanel, BoxLayout.Y_AXIS));
+		wrapperPanel.add(fcWarningLabel);
+		wrapperPanel.add(formPanel);
+
 		int result = JOptionPane.showConfirmDialog(
 			this,
-			formPanel,
+			wrapperPanel,
 			"Create Group",
 			JOptionPane.OK_CANCEL_OPTION,
 			JOptionPane.PLAIN_MESSAGE
 		);
+
+		plugin.setFcStatusCallback(null);
 
 		if (result == JOptionPane.OK_OPTION)
 		{
