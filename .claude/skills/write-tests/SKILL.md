@@ -29,12 +29,18 @@ If code is hard to test, refactor it (extract logic, inject the dependency).
 
 ```
 src/test/java/com/groupfinder/
-  unit/          Pure logic — no RuneLite, no network
-  plugin/        Plugin behavior — mocked RuneLite API surface
-  client/        HTTP client contract — MockWebServer
+  unit/                               Pure logic — no RuneLite, no network
+  GroupFinderPluginBehaviorTest.java  Plugin behavior — same package as plugin (see note)
+  client/                             HTTP client contract — MockWebServer
 ```
 
-Use sub-packages, not a flat list of files.
+**Plugin behavior tests must be in `package com.groupfinder`, not a sub-package.**
+`GroupFinderPlugin`'s callable methods (`createGroup`, `deleteGroup`, `refreshListings`, etc.)
+are package-private. Java package-private means accessible only within `com.groupfinder` —
+a class in `com.groupfinder.plugin` cannot call them. Put the test file directly in
+`src/test/java/com/groupfinder/` with `package com.groupfinder;` at the top.
+
+`GroupFinderClientTest` lives in `client/` because `GroupFinderClient`'s methods are `public`.
 
 ### Class naming
 
@@ -193,6 +199,18 @@ private void makeClientThreadSynchronous() {
 
 Call this inside any test that exercises a `clientThread.invokeLater(...)` code path.
 
+**Important:** `ClientThread` has two overloads — `invokeLater(Runnable)` and
+`invokeLater(BooleanSupplier)`. Always use `any(Runnable.class)`, never bare `any()`,
+or Mockito will report an ambiguous method reference:
+
+```java
+// Good
+verify(mockClientThread, never()).invokeLater(any(Runnable.class));
+
+// Compile error — ambiguous overload
+verify(mockClientThread, never()).invokeLater(any());
+```
+
 ### Testing failure paths in async runnables
 
 When production code submits work via `executorService.execute()` or `clientThread.invokeLater()`,
@@ -283,11 +301,28 @@ void setUp() throws Exception {
 }
 
 @AfterEach
-void tearDown() throws Exception { server.shutdown(); }
+void tearDown() {
+    try { server.shutdown(); } catch (IOException ignored) { }
+}
 ```
 
 Enqueue one response per test. Capture `server.takeRequest()` to assert HTTP verb,
 path, query parameters, and request body. Never share server state across tests.
+
+**Network failure tests:** shut the server down inside the test, then make the request.
+The `@AfterEach` `try/catch` above handles the harmless double-shutdown:
+
+```java
+@Test
+void getGroups_onNetworkFailure_returnsEmptyList() throws IOException {
+    server.shutdown(); // nothing listening on the port → ConnectException (IOException)
+
+    assertThat(client.getGroups(null)).isEmpty();
+}
+```
+
+Do not use `SocketPolicy.DISCONNECT_AT_START` — OkHttp may silently retry the request
+on the same server, consuming a queued response and making the test non-deterministic.
 
 ---
 
@@ -409,6 +444,26 @@ void onGameStateChanged_disconnectingStates_clearInFriendsChat(GameState state) 
 
 Use `@CsvSource` for multiple correlated inputs. Use `@MethodSource` for complex objects.
 
+**Do not write a hand-rolled `@Test` that spot-checks specific values already covered by
+`@EnumSource`.** If you parameterize over `Activity.class`, every constant is already tested;
+adding a separate `@Test` for `CHAMBERS_OF_XERIC` and `OTHER` is pure duplication:
+
+```java
+// Bad — redundant with the @ParameterizedTest below
+@Test
+void toString_returnsDisplayName_forSelectedValues() {
+    assertThat(Activity.CHAMBERS_OF_XERIC.toString()).isEqualTo("Chambers of Xeric");
+    assertThat(Activity.OTHER.toString()).isEqualTo("Other");
+}
+
+// Good — covers every value; the spot-check above adds nothing
+@ParameterizedTest
+@EnumSource(Activity.class)
+void toString_equalsDisplayName(Activity activity) {
+    assertThat(activity.toString()).isEqualTo(activity.getDisplayName());
+}
+```
+
 ---
 
 ## Arrange-Act-Assert
@@ -436,6 +491,41 @@ void createGroup_onApiSuccess_updatesPanel() {
 
 One behavioral claim per test. If a test requires ten verifications it is probably
 testing multiple things — split it.
+
+**Two `verify()` calls on different mocks are usually two claims.** Split them unless
+the two side-effects are inseparable from the user's perspective (e.g., a delete always
+polls and then updates the panel — those two are one indivisible outcome). When you keep
+them together, add a comment explaining why they belong in the same test:
+
+```java
+// Good — two distinct claims, split into two tests
+@Test void whenApiSucceeds_panelIsRefreshed() { ... }
+@Test void passesActivityToClient() { ... }
+
+// Acceptable when the two effects are one atomic outcome — document it
+@Test void whenApiSucceeds_clientIsCalledAndPanelUpdated() {
+    // These are inseparable: the panel update only happens after the client call succeeds.
+    verify(mockGroupFinderClient).getGroups(Activity.CHAMBERS_OF_XERIC);
+    verify(mockPanel).updateListings(listings);
+}
+```
+
+**Do not put assertions in the Arrange section.** A sanity check that a precondition
+was established is not a test assertion — it obscures the AAA boundary and can make a
+test appear to check two transitions at once:
+
+```java
+// Bad — assertThat in Arrange muddies the boundary
+plugin.onFriendsChatChanged(joinEvent);
+assertThat(plugin.isInFriendsChat()).isTrue(); // ← this is not "Assert", it is "Arrange"
+plugin.onFriendsChatChanged(leaveEvent);
+assertThat(plugin.isInFriendsChat()).isFalse();
+
+// Good — trust the setup; the joined→true case is covered by its own test
+plugin.onFriendsChatChanged(joinEvent); // Arrange: get into the right state
+plugin.onFriendsChatChanged(leaveEvent); // Act
+assertThat(plugin.isInFriendsChat()).isFalse(); // Assert
+```
 
 ---
 
