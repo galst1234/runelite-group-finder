@@ -270,6 +270,28 @@ SwingUtilities.invokeAndWait(() -> {});
 
 Only do this when the assertion depends on a side effect dispatched via `invokeLater`.
 
+Always let the checked exceptions from `SwingUtilities.invokeAndWait` propagate —
+do **not** catch and swallow them. Add `throws Exception` to the test method
+signature; JUnit 5 handles it correctly:
+
+```java
+// Good — exceptions propagate; test fails if EDT task throws
+@Test
+void loginScreen_invokesCallback() throws Exception {
+    plugin.onGameStateChanged(event);
+    SwingUtilities.invokeAndWait(() -> {});
+    verify(mockCallback).run();
+}
+
+// Bad — swallowing exceptions hides EDT failures; test passes vacuously
+@Test
+void loginScreen_invokesCallback() {
+    plugin.onGameStateChanged(event);
+    try { SwingUtilities.invokeAndWait(() -> {}); } catch (Exception ignored) {}
+    verify(mockCallback).run();
+}
+```
+
 ### Testing `@Subscribe` event handlers
 
 Call the handler method directly — do not test that RuneLite's event bus wires it up:
@@ -368,6 +390,23 @@ Use `LENIENT` only when a `@BeforeEach` stub is intentionally unused in some tes
 
 Document why when you use lenient mode.
 
+Scope `@MockitoSettings(strictness = Strictness.LENIENT)` as narrowly as possible.
+Applying it at the class level disables unused-stub detection for every mock in every
+test — including per-test stubs that should be exercised. If you must use class-level
+LENIENT because multiple `@BeforeEach` stubs are intentionally unused in subsets of
+tests, document the exact reason in a class-level comment:
+
+```java
+// LENIENT: executorService and clientThread stubs in @BeforeEach are not
+// exercised in tests that never reach an async code path.
+@MockitoSettings(strictness = Strictness.LENIENT)
+class GroupFinderPluginBehaviorTest { ... }
+```
+
+Never use class-level LENIENT to silence a per-test stub warning. If a stub set
+up inside a `@Test` body is unused, either the stub is wrong or the test is
+covering the wrong thing — remove it.
+
 ### Prefer state assertions over interaction verification
 
 Verify mock interactions only for side effects that are part of the contract
@@ -435,6 +474,7 @@ These are hard bans — do not generate tests that contain them:
 | `body.contains("FIELD_VALUE")` or any assertion on a raw JSON/text body string | Ties tests to field ordering and serialization details; deserialize and assert on parsed values instead |
 | Two test methods that assert the same observable outcome on the same code path | Duplication; delete the weaker one |
 | Creating `pom.xml`, `target/`, or Maven artifacts in a Gradle project | This is a Gradle project; never scaffold or invoke Maven tooling |
+| `verify(mock).method(contains("partial"))` when the exact error string is a known literal in the production code | Allows misspelled messages to pass; use `isEqualTo("exact message")` for hardcoded literals |
 
 ---
 
@@ -582,11 +622,19 @@ assertThat(plugin.isInFriendsChat()).isFalse(); // Assert
 - All validation guards in `createGroup` (null player, null name, no FC)
 - NBSP normalisation for player name and FC owner name
 - API success path → panel updated
-- API failure path → error displayed
+- API failure path → error displayed AND `verify(mockGroupFinderClient, never()).getGroups(any())` — a failed create/delete/update must not silently trigger a panel refresh
 - `onFriendsChatChanged` joined/left state transitions + callback invocation
 - `onGameStateChanged` LOGIN_SCREEN and HOPPING clear FC state; other states do not
 - `joinFriendsChat` null/empty guard, not-logged-in guard, dialog-absent path (guide message), dialog-open path (no guide message)
-- `refreshListings` success updates panel; exception shows connection error
+  Note on the dialog-open path: `client.getCanvas()` returns an AWT `Canvas`.
+  Dispatching `KeyEvent` to a null canvas throws `NullPointerException`. To test
+  this path, stub `when(mockClient.getCanvas()).thenReturn(new java.awt.Canvas())`
+  or extract key-dispatch into a separate injectable collaborator. If neither is
+  feasible without broader refactoring, document this gap explicitly in the "report
+  gaps" step of the test generation workflow (step 6).
+- `refreshListings` non-empty result → `panel.updateListings(list)` called
+- `refreshListings` empty-list result → `panel.updateListings(Collections.emptyList())` called, NOT `showError`
+- `refreshListings` exception → `panel.showError("Could not connect to server")` (exact string, not `contains(...)`)
 - `onFilterChanged` passes the activity through to the client
 
 ### GroupFinderClient
@@ -634,6 +682,23 @@ static GroupListing listing() {
 ```
 
 Helpers live in `src/test` only — never in `src/main`.
+
+When a fixture is defined in `package com.groupfinder` but a test lives in a
+sub-package (e.g. `com.groupfinder.client`), do **not** duplicate the fixture as a
+private inner class — duplicates drift independently over time. Instead make the
+fixture class `public` so it is importable across test packages:
+
+```java
+// src/test/java/com/groupfinder/GroupListingFixture.java
+public class GroupListingFixture {           // public, not package-private
+    public static GroupListing listing() { ... }
+}
+```
+
+Then `GroupFinderClientTest` imports it directly:
+```java
+import com.groupfinder.GroupListingFixture;
+```
 
 ---
 
