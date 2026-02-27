@@ -589,7 +589,7 @@ class GroupFinderPluginBehaviorTest
 			when(mockWidget.isHidden()).thenReturn(false);
 			when(mockWidget.getText()).thenReturn("Enter the player name");
 			// Provide a real Canvas so key dispatch does not NPE
-			when(mockClient.getCanvas()).thenReturn(new java.awt.Canvas());
+			when(mockClient.getCanvas()).thenReturn(mock(java.awt.Canvas.class));
 
 			// Act
 			plugin.joinFriendsChat("SomeFC");
