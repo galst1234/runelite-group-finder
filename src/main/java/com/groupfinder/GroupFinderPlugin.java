@@ -79,7 +79,7 @@ public class GroupFinderPlugin extends Plugin
 	@Inject
 	private ChatMessageManager chatMessageManager;
 
-	private GroupFinderPanel panel;
+	private GroupFinderPanelView panel;
 	private NavigationButton navButton;
 	private ScheduledExecutorService executorService;
 	private ScheduledFuture<?> pollFuture;
@@ -90,7 +90,8 @@ public class GroupFinderPlugin extends Plugin
 	@Override
 	protected void startUp() throws Exception
 	{
-		panel = injector.getInstance(GroupFinderPanel.class);
+		GroupFinderPanel concretePanel = injector.getInstance(GroupFinderPanel.class);
+		panel = concretePanel;
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
 
@@ -98,7 +99,7 @@ public class GroupFinderPlugin extends Plugin
 			.tooltip("Group Finder")
 			.icon(icon)
 			.priority(7)
-			.panel(panel)
+			.panel(concretePanel)
 			.build();
 
 		clientToolbar.addNavigation(navButton);

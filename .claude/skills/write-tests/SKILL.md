@@ -21,6 +21,25 @@ Write tests for $ARGUMENTS following the guide below.
 Do not use PowerMock, JMockit, or any bytecode-rewriting framework.
 If code is hard to test, refactor it (extract logic, inject the dependency).
 
+### build.gradle test classpath rules
+
+When adding test dependencies, audit every `compileOnly` dependency in the
+main configuration. If any production class that will be loaded during tests
+references that dependency (including via generated code such as Lombok
+annotations), you MUST add it to `testRuntimeOnly` as well.
+
+Required entries whenever Lombok is present on the main compile classpath:
+
+    testRuntimeOnly 'org.slf4j:slf4j-api:<version>'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:<version>'
+
+Required entries whenever javax.inject / Jakarta inject is compileOnly:
+
+    testRuntimeOnly 'javax.inject:javax.inject:1'
+
+This project uses Gradle exclusively. Do NOT create a pom.xml or a target/
+directory. Any Maven artifacts are spurious and must be deleted.
+
 ---
 
 ## Test structure and naming
@@ -153,6 +172,12 @@ private void inject(String field, Object value) throws Exception {
 
 Only inject fields that the test actually touches. Leave the rest null.
 
+**Important:** The declared type of the field in the plugin class determines
+the required mock type. A field declared as `ScheduledExecutorService` requires
+`@Mock ScheduledExecutorService`, NOT `@Mock ExecutorService`. Check the
+actual field type in the plugin source before writing your mock declaration.
+Mismatched types cause `IllegalArgumentException` at `field.set(plugin, value)`.
+
 ### Mocking the RuneLite API surface
 
 Always mock these — never use real instances:
@@ -244,6 +269,28 @@ SwingUtilities.invokeAndWait(() -> {});
 ```
 
 Only do this when the assertion depends on a side effect dispatched via `invokeLater`.
+
+Always let the checked exceptions from `SwingUtilities.invokeAndWait` propagate —
+do **not** catch and swallow them. Add `throws Exception` to the test method
+signature; JUnit 5 handles it correctly:
+
+```java
+// Good — exceptions propagate; test fails if EDT task throws
+@Test
+void loginScreen_invokesCallback() throws Exception {
+    plugin.onGameStateChanged(event);
+    SwingUtilities.invokeAndWait(() -> {});
+    verify(mockCallback).run();
+}
+
+// Bad — swallowing exceptions hides EDT failures; test passes vacuously
+@Test
+void loginScreen_invokesCallback() {
+    plugin.onGameStateChanged(event);
+    try { SwingUtilities.invokeAndWait(() -> {}); } catch (Exception ignored) {}
+    verify(mockCallback).run();
+}
+```
 
 ### Testing `@Subscribe` event handlers
 
@@ -343,6 +390,23 @@ Use `LENIENT` only when a `@BeforeEach` stub is intentionally unused in some tes
 
 Document why when you use lenient mode.
 
+Scope `@MockitoSettings(strictness = Strictness.LENIENT)` as narrowly as possible.
+Applying it at the class level disables unused-stub detection for every mock in every
+test — including per-test stubs that should be exercised. If you must use class-level
+LENIENT because multiple `@BeforeEach` stubs are intentionally unused in subsets of
+tests, document the exact reason in a class-level comment:
+
+```java
+// LENIENT: executorService and clientThread stubs in @BeforeEach are not
+// exercised in tests that never reach an async code path.
+@MockitoSettings(strictness = Strictness.LENIENT)
+class GroupFinderPluginBehaviorTest { ... }
+```
+
+Never use class-level LENIENT to silence a per-test stub warning. If a stub set
+up inside a `@Test` body is unused, either the stub is wrong or the test is
+covering the wrong thing — remove it.
+
 ### Prefer state assertions over interaction verification
 
 Verify mock interactions only for side effects that are part of the contract
@@ -407,6 +471,10 @@ These are hard bans — do not generate tests that contain them:
 | `@BeforeAll` static mutable shared fixtures | Breaks test isolation; use `@BeforeEach` |
 | Catching exceptions with `try/catch` to then assert | Use `assertThatThrownBy` instead |
 | `assertTrue(result != null)` or `assertFalse(list.isEmpty())` | Use AssertJ: `assertThat(result).isNotNull()`, `isNotEmpty()` |
+| `body.contains("FIELD_VALUE")` or any assertion on a raw JSON/text body string | Ties tests to field ordering and serialization details; deserialize and assert on parsed values instead |
+| Two test methods that assert the same observable outcome on the same code path | Duplication; delete the weaker one |
+| Creating `pom.xml`, `target/`, or Maven artifacts in a Gradle project | This is a Gradle project; never scaffold or invoke Maven tooling |
+| `verify(mock).method(contains("partial"))` when the exact error string is a known literal in the production code | Allows misspelled messages to pass; use `isEqualTo("exact message")` for hardcoded literals |
 
 ---
 
@@ -447,6 +515,12 @@ Use `@CsvSource` for multiple correlated inputs. Use `@MethodSource` for complex
 **Do not write a hand-rolled `@Test` that spot-checks specific values already covered by
 `@EnumSource`.** If you parameterize over `Activity.class`, every constant is already tested;
 adding a separate `@Test` for `CHAMBERS_OF_XERIC` and `OTHER` is pure duplication:
+
+Also forbidden: a `@Test` that asserts a negative proxy condition
+(e.g., `assertThat(activity.toString()).doesNotContain("_")`) when that
+condition is already fully implied by an existing `@ParameterizedTest`.
+Write a new parameterized test only when it exercises a genuinely independent
+contract not covered by any existing `@EnumSource` test.
 
 ```java
 // Bad — redundant with the @ParameterizedTest below
@@ -548,11 +622,19 @@ assertThat(plugin.isInFriendsChat()).isFalse(); // Assert
 - All validation guards in `createGroup` (null player, null name, no FC)
 - NBSP normalisation for player name and FC owner name
 - API success path → panel updated
-- API failure path → error displayed
+- API failure path → error displayed AND `verify(mockGroupFinderClient, never()).getGroups(any())` — a failed create/delete/update must not silently trigger a panel refresh
 - `onFriendsChatChanged` joined/left state transitions + callback invocation
 - `onGameStateChanged` LOGIN_SCREEN and HOPPING clear FC state; other states do not
 - `joinFriendsChat` null/empty guard, not-logged-in guard, dialog-absent path (guide message), dialog-open path (no guide message)
-- `refreshListings` success updates panel; exception shows connection error
+  Note on the dialog-open path: `client.getCanvas()` returns an AWT `Canvas`.
+  Dispatching `KeyEvent` to a null canvas throws `NullPointerException`. To test
+  this path, stub `when(mockClient.getCanvas()).thenReturn(new java.awt.Canvas())`
+  or extract key-dispatch into a separate injectable collaborator. If neither is
+  feasible without broader refactoring, document this gap explicitly in the "report
+  gaps" step of the test generation workflow (step 6).
+- `refreshListings` non-empty result → `panel.updateListings(list)` called
+- `refreshListings` empty-list result → `panel.updateListings(Collections.emptyList())` called, NOT `showError`
+- `refreshListings` exception → `panel.showError("Could not connect to server")` (exact string, not `contains(...)`)
 - `onFilterChanged` passes the activity through to the client
 
 ### GroupFinderClient
@@ -601,6 +683,23 @@ static GroupListing listing() {
 
 Helpers live in `src/test` only — never in `src/main`.
 
+When a fixture is defined in `package com.groupfinder` but a test lives in a
+sub-package (e.g. `com.groupfinder.client`), do **not** duplicate the fixture as a
+private inner class — duplicates drift independently over time. Instead make the
+fixture class `public` so it is importable across test packages:
+
+```java
+// src/test/java/com/groupfinder/GroupListingFixture.java
+public class GroupListingFixture {           // public, not package-private
+    public static GroupListing listing() { ... }
+}
+```
+
+Then `GroupFinderClientTest` imports it directly:
+```java
+import com.groupfinder.GroupListingFixture;
+```
+
 ---
 
 ## Review checklist before committing a new test
@@ -611,3 +710,18 @@ Helpers live in `src/test` only — never in `src/main`.
 - [ ] Is there a simpler, lower-level place to test this?
 - [ ] Is there exactly one reason this test would fail?
 - [ ] Are all inputs arranged explicitly (no hidden state from other tests)?
+
+---
+
+## Pre-submission checklist
+
+Before considering the test task complete, verify every item:
+
+- [ ] `./gradlew test` exits 0 — no compile errors, no test failures
+- [ ] Every `compileOnly` dependency has been audited; those needed at test
+      runtime are in `testRuntimeOnly`
+- [ ] No `pom.xml` or `target/` directory exists in the repository root
+- [ ] No `@Test` spot-checks duplicate values already covered by `@EnumSource`
+- [ ] No raw string body assertions (`body.contains(...)`)
+- [ ] All mock field types exactly match the declared field type in the plugin source
+- [ ] No test method pair asserts the same observable outcome on the same code path

@@ -24,22 +24,16 @@
  */
 package com.groupfinder;
 
+import java.util.List;
+
 /**
- * Plugin launcher entry point.
- * Run via the 'run' Gradle task to start RuneLite with this plugin loaded.
- *
- * Note: The full RuneLite launcher dependencies (net.runelite:jshell) are not
- * bundled in the offline stub; this class is a placeholder and is not executed
- * during unit tests.
+ * View contract for the Group Finder panel.
+ * Extracted as an interface so that plugin business logic can be tested
+ * without instantiating the real Swing panel (which loads image resources).
  */
-public class GroupFinderPluginTest
+public interface GroupFinderPanelView
 {
-	public static void main(String[] args) throws Exception
-	{
-		// Launch via the full RuneLite classpath when jshell is available.
-		// In the offline test environment this class is not invoked.
-		throw new UnsupportedOperationException(
-			"Run with the full RuneLite classpath to launch the plugin."
-		);
-	}
+	void updateListings(List<GroupListing> listings);
+
+	void showError(String message);
 }

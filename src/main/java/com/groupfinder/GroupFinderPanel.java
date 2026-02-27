@@ -55,7 +55,7 @@ import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.ImageUtil;
 
 @Slf4j
-public class GroupFinderPanel extends PluginPanel
+public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelView
 {
 	private static final ImageIcon DELETE_ICON;
 
