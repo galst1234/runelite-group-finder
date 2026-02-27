@@ -21,6 +21,25 @@ Write tests for $ARGUMENTS following the guide below.
 Do not use PowerMock, JMockit, or any bytecode-rewriting framework.
 If code is hard to test, refactor it (extract logic, inject the dependency).
 
+### build.gradle test classpath rules
+
+When adding test dependencies, audit every `compileOnly` dependency in the
+main configuration. If any production class that will be loaded during tests
+references that dependency (including via generated code such as Lombok
+annotations), you MUST add it to `testRuntimeOnly` as well.
+
+Required entries whenever Lombok is present on the main compile classpath:
+
+    testRuntimeOnly 'org.slf4j:slf4j-api:<version>'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:<version>'
+
+Required entries whenever javax.inject / Jakarta inject is compileOnly:
+
+    testRuntimeOnly 'javax.inject:javax.inject:1'
+
+This project uses Gradle exclusively. Do NOT create a pom.xml or a target/
+directory. Any Maven artifacts are spurious and must be deleted.
+
 ---
 
 ## Test structure and naming
@@ -152,6 +171,12 @@ private void inject(String field, Object value) throws Exception {
 ```
 
 Only inject fields that the test actually touches. Leave the rest null.
+
+**Important:** The declared type of the field in the plugin class determines
+the required mock type. A field declared as `ScheduledExecutorService` requires
+`@Mock ScheduledExecutorService`, NOT `@Mock ExecutorService`. Check the
+actual field type in the plugin source before writing your mock declaration.
+Mismatched types cause `IllegalArgumentException` at `field.set(plugin, value)`.
 
 ### Mocking the RuneLite API surface
 
@@ -407,6 +432,9 @@ These are hard bans — do not generate tests that contain them:
 | `@BeforeAll` static mutable shared fixtures | Breaks test isolation; use `@BeforeEach` |
 | Catching exceptions with `try/catch` to then assert | Use `assertThatThrownBy` instead |
 | `assertTrue(result != null)` or `assertFalse(list.isEmpty())` | Use AssertJ: `assertThat(result).isNotNull()`, `isNotEmpty()` |
+| `body.contains("FIELD_VALUE")` or any assertion on a raw JSON/text body string | Ties tests to field ordering and serialization details; deserialize and assert on parsed values instead |
+| Two test methods that assert the same observable outcome on the same code path | Duplication; delete the weaker one |
+| Creating `pom.xml`, `target/`, or Maven artifacts in a Gradle project | This is a Gradle project; never scaffold or invoke Maven tooling |
 
 ---
 
@@ -447,6 +475,12 @@ Use `@CsvSource` for multiple correlated inputs. Use `@MethodSource` for complex
 **Do not write a hand-rolled `@Test` that spot-checks specific values already covered by
 `@EnumSource`.** If you parameterize over `Activity.class`, every constant is already tested;
 adding a separate `@Test` for `CHAMBERS_OF_XERIC` and `OTHER` is pure duplication:
+
+Also forbidden: a `@Test` that asserts a negative proxy condition
+(e.g., `assertThat(activity.toString()).doesNotContain("_")`) when that
+condition is already fully implied by an existing `@ParameterizedTest`.
+Write a new parameterized test only when it exercises a genuinely independent
+contract not covered by any existing `@EnumSource` test.
 
 ```java
 // Bad — redundant with the @ParameterizedTest below
@@ -611,3 +645,18 @@ Helpers live in `src/test` only — never in `src/main`.
 - [ ] Is there a simpler, lower-level place to test this?
 - [ ] Is there exactly one reason this test would fail?
 - [ ] Are all inputs arranged explicitly (no hidden state from other tests)?
+
+---
+
+## Pre-submission checklist
+
+Before considering the test task complete, verify every item:
+
+- [ ] `./gradlew test` exits 0 — no compile errors, no test failures
+- [ ] Every `compileOnly` dependency has been audited; those needed at test
+      runtime are in `testRuntimeOnly`
+- [ ] No `pom.xml` or `target/` directory exists in the repository root
+- [ ] No `@Test` spot-checks duplicate values already covered by `@EnumSource`
+- [ ] No raw string body assertions (`body.contains(...)`)
+- [ ] All mock field types exactly match the declared field type in the plugin source
+- [ ] No test method pair asserts the same observable outcome on the same code path
