@@ -4,4 +4,4 @@ A [RuneLite](https://runelite.net/) plugin that lets Old School RuneScape player
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+BSD 2-Clause — see [LICENSE](LICENSE)
