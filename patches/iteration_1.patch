@@ -1,0 +1,1660 @@
+diff --git a/build.gradle b/build.gradle
+index cb33a47..d8948e9 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -13,18 +13,54 @@ repositories {
+ 	mavenCentral()
+ }
+ 
+-def runeLiteVersion = 'latest.release'
++def runeLiteVersion = '1.0-stub'
+ def pluginMainClass = 'com.groupfinder.GroupFinderPluginTest'
+ 
+ dependencies {
+ 	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
+ 
++	// Runtime dependencies the plugin sources reference directly
++	compileOnly 'javax.inject:javax.inject:1'
++	compileOnly 'org.slf4j:slf4j-api:2.0.16'
++	compileOnly 'com.google.code.gson:gson:2.11.0'
++	compileOnly 'com.squareup.okhttp3:okhttp:4.12.0'
++
+ 	compileOnly 'org.projectlombok:lombok:1.18.30'
+ 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
+ 
+-	testImplementation 'junit:junit:4.12'
+ 	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
+-	testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
++
++	// JUnit 5
++	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.4'
++	testImplementation 'org.junit.jupiter:junit-jupiter-params:5.11.4'
++	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.11.4'
++
++	// Mockito
++	testImplementation 'org.mockito:mockito-core:5.15.2'
++	testImplementation 'org.mockito:mockito-junit-jupiter:5.15.2'
++
++	// AssertJ
++	testImplementation 'org.assertj:assertj-core:3.27.3'
++
++	// Gson (used by GroupFinderClientTest)
++	testImplementation 'com.google.code.gson:gson:2.11.0'
++
++	// OkHttp MockWebServer
++	testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
++	testImplementation 'com.squareup.okhttp3:okhttp:4.12.0'
++}
++
++sourceSets {
++	test {
++		java {
++			// GroupFinderPluginTest is a manual RuneLite launcher — exclude from unit test compile
++			exclude '**/GroupFinderPluginTest.java'
++		}
++	}
++}
++
++test {
++	useJUnitPlatform()
+ }
+ 
+ group = 'com.groupfinder'
+diff --git a/src/main/java/com/groupfinder/GroupFinderPanel.java b/src/main/java/com/groupfinder/GroupFinderPanel.java
+index 8f281ad..e9d92c3 100644
+--- a/src/main/java/com/groupfinder/GroupFinderPanel.java
++++ b/src/main/java/com/groupfinder/GroupFinderPanel.java
+@@ -55,7 +55,7 @@ import net.runelite.client.ui.PluginPanel;
+ import net.runelite.client.util.ImageUtil;
+ 
+ @Slf4j
+-public class GroupFinderPanel extends PluginPanel
++public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelView
+ {
+ 	private static final ImageIcon DELETE_ICON;
+ 
+diff --git a/src/main/java/com/groupfinder/GroupFinderPanelView.java b/src/main/java/com/groupfinder/GroupFinderPanelView.java
+new file mode 100644
+index 0000000..c365307
+--- /dev/null
++++ b/src/main/java/com/groupfinder/GroupFinderPanelView.java
+@@ -0,0 +1,45 @@
++/*
++ * Copyright (c) 2025, galst
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++package com.groupfinder;
++
++import java.util.List;
++
++/**
++ * View contract for the Group Finder panel.
++ * Extracted so that {@link GroupFinderPlugin} can be tested without instantiating
++ * the full Swing {@link GroupFinderPanel} (which loads image resources at class init).
++ */
++public interface GroupFinderPanelView
++{
++	/**
++	 * Replace the current listing display with the provided list.
++	 */
++	void updateListings(List<GroupListing> listings);
++
++	/**
++	 * Display an error message to the user.
++	 */
++	void showError(String message);
++}
+diff --git a/src/main/java/com/groupfinder/GroupFinderPlugin.java b/src/main/java/com/groupfinder/GroupFinderPlugin.java
+index 8cebecf..cdae0e7 100644
+--- a/src/main/java/com/groupfinder/GroupFinderPlugin.java
++++ b/src/main/java/com/groupfinder/GroupFinderPlugin.java
+@@ -79,7 +79,7 @@ public class GroupFinderPlugin extends Plugin
+ 	@Inject
+ 	private ChatMessageManager chatMessageManager;
+ 
+-	private GroupFinderPanel panel;
++	private GroupFinderPanelView panel;
+ 	private NavigationButton navButton;
+ 	private ScheduledExecutorService executorService;
+ 	private ScheduledFuture<?> pollFuture;
+@@ -90,7 +90,8 @@ public class GroupFinderPlugin extends Plugin
+ 	@Override
+ 	protected void startUp() throws Exception
+ 	{
+-		panel = injector.getInstance(GroupFinderPanel.class);
++		final GroupFinderPanel concretePanel = injector.getInstance(GroupFinderPanel.class);
++		panel = concretePanel;
+ 
+ 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
+ 
+@@ -98,7 +99,7 @@ public class GroupFinderPlugin extends Plugin
+ 			.tooltip("Group Finder")
+ 			.icon(icon)
+ 			.priority(7)
+-			.panel(panel)
++			.panel(concretePanel)
+ 			.build();
+ 
+ 		clientToolbar.addNavigation(navButton);
+diff --git a/src/test/java/com/groupfinder/GroupFinderPluginBehaviorTest.java b/src/test/java/com/groupfinder/GroupFinderPluginBehaviorTest.java
+new file mode 100644
+index 0000000..125aed3
+--- /dev/null
++++ b/src/test/java/com/groupfinder/GroupFinderPluginBehaviorTest.java
+@@ -0,0 +1,830 @@
++/*
++ * Copyright (c) 2025, galst
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++package com.groupfinder;
++
++import net.runelite.api.Client;
++import net.runelite.api.FriendsChatManager;
++import net.runelite.api.GameState;
++import net.runelite.api.Player;
++import net.runelite.api.events.FriendsChatChanged;
++import net.runelite.api.events.GameStateChanged;
++import net.runelite.api.widgets.Widget;
++import net.runelite.client.callback.ClientThread;
++import net.runelite.client.chat.ChatMessageManager;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Nested;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.EnumSource;
++import org.junit.jupiter.params.provider.ValueSource;
++import org.mockito.ArgumentCaptor;
++import org.mockito.Mock;
++import org.mockito.junit.jupiter.MockitoExtension;
++import org.mockito.junit.jupiter.MockitoSettings;
++import org.mockito.quality.Strictness;
++
++import java.lang.reflect.Field;
++import java.util.List;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.contains;
++import static org.mockito.Mockito.doAnswer;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
++import static org.mockito.Mockito.when;
++
++/**
++ * Level 2 – Plugin behavior tests with mocked RuneLite.
++ * <p>
++ * Must be in {@code package com.groupfinder} (not a sub-package) because
++ * the plugin's methods are package-private.
++ * <p>
++ * startUp() is never called — fields are injected via reflection in {@code @BeforeEach}.
++ */
++@ExtendWith(MockitoExtension.class)
++// LENIENT because some @BeforeEach stubs (e.g. executorService) are unused in tests
++// that only test event handlers that don't touch the executor.
++@MockitoSettings(strictness = Strictness.LENIENT)
++class GroupFinderPluginBehaviorTest
++{
++	@Mock
++	private Client mockClient;
++
++	@Mock
++	private ClientThread mockClientThread;
++
++	@Mock
++	private GroupFinderConfig mockConfig;
++
++	@Mock
++	private GroupFinderClient mockGroupFinderClient;
++
++	@Mock
++	private ChatMessageManager mockChatMessageManager;
++
++	@Mock
++	private GroupFinderPanelView mockPanel;
++
++	@Mock
++	private Player mockPlayer;
++
++	@Mock
++	private FriendsChatManager mockFcm;
++
++	@Mock
++	private ExecutorService mockExecutor;
++
++	private GroupFinderPlugin plugin;
++
++	@BeforeEach
++	void setUp() throws Exception
++	{
++		plugin = new GroupFinderPlugin();
++		inject("client", mockClient);
++		inject("clientThread", mockClientThread);
++		inject("config", mockConfig);
++		inject("groupFinderClient", mockGroupFinderClient);
++		inject("chatMessageManager", mockChatMessageManager);
++		inject("panel", mockPanel);
++		inject("executorService", mockExecutor);
++
++		// Make executorService.execute() run the submitted Runnable inline (synchronous).
++		doAnswer(inv ->
++		{
++			((Runnable) inv.getArgument(0)).run();
++			return null;
++		}).when(mockExecutor).execute(any(Runnable.class));
++	}
++
++	private void inject(String fieldName, Object value) throws Exception
++	{
++		Field f = GroupFinderPlugin.class.getDeclaredField(fieldName);
++		f.setAccessible(true);
++		f.set(plugin, value);
++	}
++
++	/** Make clientThread.invokeLater(Runnable) execute inline. */
++	private void makeClientThreadSynchronous()
++	{
++		doAnswer(inv ->
++		{
++			((Runnable) inv.getArgument(0)).run();
++			return null;
++		}).when(mockClientThread).invokeLater(any(Runnable.class));
++	}
++
++	// -------------------------------------------------------------------------
++	// createGroup
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class CreateGroup
++	{
++		@Test
++		void whenPlayerIsNull_showsLoginError()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(null);
++			GroupListing listing = GroupListingFixture.listing();
++			listing.setPlayerName(null);
++
++			// Act
++			plugin.createGroup(listing);
++
++			// Assert
++			verify(mockPanel).showError("You must be logged in to create a group");
++		}
++
++		@Test
++		void whenPlayerNameIsNull_showsLoginError()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn(null);
++			GroupListing listing = GroupListingFixture.listing();
++			listing.setPlayerName(null);
++
++			// Act
++			plugin.createGroup(listing);
++
++			// Assert
++			verify(mockPanel).showError("You must be logged in to create a group");
++		}
++
++		@ParameterizedTest
++		@ValueSource(strings = {"", " ", "  "})
++		void whenPlayerNameIsBlankAfterNormalization_showsLoginError(String name)
++		{
++			// Arrange — player returns a blank name; no FC is in play
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn(name);
++			GroupListing listing = new GroupListing();
++			listing.setPlayerName(null);
++
++			// Act
++			plugin.createGroup(listing);
++
++			// Assert
++			verify(mockPanel).showError("You must be logged in to create a group");
++		}
++
++		@Test
++		void whenNoFriendsChat_showsFcError()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Alice");
++			when(mockClient.getFriendsChatManager()).thenReturn(null);
++			GroupListing listing = GroupListingFixture.listing();
++
++			// Act
++			plugin.createGroup(listing);
++
++			// Assert
++			verify(mockPanel).showError("Join a Friends Chat before creating a group");
++		}
++
++		@Test
++		void whenNoFriendsChat_doesNotCallApi()
++		{
++			// Arrange — guard must prevent API call
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Alice");
++			when(mockClient.getFriendsChatManager()).thenReturn(null);
++
++			// Act
++			plugin.createGroup(GroupListingFixture.listing());
++
++			// Assert — guard contract: API must NOT be called
++			verify(mockGroupFinderClient, never()).createGroup(any());
++		}
++
++		@Test
++		void onApiSuccess_panelIsRefreshed()
++		{
++			// Arrange
++			List<GroupListing> refreshed = List.of(GroupListingFixture.listing());
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Alice");
++			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
++			when(mockFcm.getOwner()).thenReturn("FCOwner");
++			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
++			when(mockGroupFinderClient.getGroups(any())).thenReturn(refreshed);
++
++			// Act
++			plugin.createGroup(GroupListingFixture.listing());
++
++			// Assert
++			verify(mockPanel).updateListings(refreshed);
++		}
++
++		@Test
++		void onApiFailure_showsCreateError()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Alice");
++			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
++			when(mockFcm.getOwner()).thenReturn("FCOwner");
++			when(mockGroupFinderClient.createGroup(any())).thenReturn(null);
++
++			// Act
++			plugin.createGroup(GroupListingFixture.listing());
++
++			// Assert
++			verify(mockPanel).showError("Failed to create group");
++		}
++
++		@Test
++		void normalizesNbspInPlayerName()
++		{
++			// Arrange — RuneLite encodes player names with non-breaking space (\u00A0)
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Bob\u00A0Smith");
++			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
++			when(mockFcm.getOwner()).thenReturn("FCOwner");
++			GroupListing listing = new GroupListing();
++			listing.setActivity(Activity.OTHER);
++			listing.setMaxSize(4);
++			listing.setCurrentSize(1);
++
++			ArgumentCaptor<GroupListing> captor = ArgumentCaptor.forClass(GroupListing.class);
++			when(mockGroupFinderClient.createGroup(captor.capture())).thenReturn(null);
++
++			// Act
++			plugin.createGroup(listing);
++
++			// Assert — NBSP must have been replaced with regular space
++			assertThat(captor.getValue().getPlayerName()).isEqualTo("Bob Smith");
++		}
++
++		@Test
++		void normalizesNbspInFcOwnerName()
++		{
++			// Arrange — FC owner name also comes from RuneLite with potential NBSP
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Alice");
++			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
++			when(mockFcm.getOwner()).thenReturn("FC\u00A0Owner");
++			GroupListing listing = new GroupListing();
++			listing.setActivity(Activity.OTHER);
++			listing.setMaxSize(4);
++			listing.setCurrentSize(1);
++
++			ArgumentCaptor<GroupListing> captor = ArgumentCaptor.forClass(GroupListing.class);
++			when(mockGroupFinderClient.createGroup(captor.capture())).thenReturn(null);
++
++			// Act
++			plugin.createGroup(listing);
++
++			// Assert
++			assertThat(captor.getValue().getFriendsChatName()).isEqualTo("FC Owner");
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// deleteGroup
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class DeleteGroup
++	{
++		@Test
++		void onApiSuccess_panelIsRefreshed()
++		{
++			// Arrange
++			List<GroupListing> refreshed = List.of(GroupListingFixture.listing());
++			when(mockGroupFinderClient.deleteGroup("id-42")).thenReturn(true);
++			when(mockGroupFinderClient.getGroups(any())).thenReturn(refreshed);
++
++			// Act
++			plugin.deleteGroup("id-42");
++
++			// Assert — after delete, the panel must be updated
++			verify(mockPanel).updateListings(refreshed);
++		}
++
++		@Test
++		void onApiFailure_showsDeleteError()
++		{
++			// Arrange
++			when(mockGroupFinderClient.deleteGroup("id-42")).thenReturn(false);
++
++			// Act
++			plugin.deleteGroup("id-42");
++
++			// Assert
++			verify(mockPanel).showError("Failed to delete group");
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// updateGroupSize
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class UpdateGroupSize
++	{
++		@Test
++		void onApiSuccess_panelIsRefreshed()
++		{
++			// Arrange
++			List<GroupListing> refreshed = List.of(GroupListingFixture.listing());
++			when(mockGroupFinderClient.updateGroup(any(), any())).thenReturn(GroupListingFixture.listing());
++			when(mockGroupFinderClient.getGroups(any())).thenReturn(refreshed);
++
++			// Act
++			plugin.updateGroupSize("id-1", 3);
++
++			// Assert
++			verify(mockPanel).updateListings(refreshed);
++		}
++
++		@Test
++		void onApiFailure_showsUpdateError()
++		{
++			// Arrange
++			when(mockGroupFinderClient.updateGroup(any(), any())).thenReturn(null);
++
++			// Act
++			plugin.updateGroupSize("id-1", 3);
++
++			// Assert
++			verify(mockPanel).showError("Failed to update group");
++		}
++
++		@Test
++		void passesCorrectSizeToClient()
++		{
++			// Arrange
++			when(mockGroupFinderClient.updateGroup(any(), any())).thenReturn(null);
++
++			// Act
++			plugin.updateGroupSize("my-group-id", 5);
++
++			// Assert — the size value passed to the API must match
++			ArgumentCaptor<java.util.Map<String, Object>> captor = ArgumentCaptor.forClass(java.util.Map.class);
++			verify(mockGroupFinderClient).updateGroup(any(), captor.capture());
++			assertThat(captor.getValue()).containsEntry("currentSize", 5);
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// refreshListings
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class RefreshListings
++	{
++		@Test
++		void onSuccess_updatesPanel()
++		{
++			// Arrange
++			List<GroupListing> listings = List.of(GroupListingFixture.listing());
++			when(mockGroupFinderClient.getGroups(any())).thenReturn(listings);
++
++			// Act
++			plugin.refreshListings();
++
++			// Assert
++			verify(mockPanel).updateListings(listings);
++		}
++
++		@Test
++		void whenClientThrows_showsConnectionError()
++		{
++			// Arrange
++			when(mockGroupFinderClient.getGroups(any())).thenThrow(new RuntimeException("timeout"));
++
++			// Act
++			plugin.refreshListings();
++
++			// Assert — exception must be surfaced to the user, not propagated
++			verify(mockPanel).showError("Could not connect to server");
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// onFilterChanged
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class OnFilterChanged
++	{
++		@Test
++		void passesActivityToClientOnRefresh()
++		{
++			// Arrange
++			List<GroupListing> listings = List.of(GroupListingFixture.listing());
++			when(mockGroupFinderClient.getGroups(Activity.CHAMBERS_OF_XERIC)).thenReturn(listings);
++
++			// Act
++			plugin.onFilterChanged(Activity.CHAMBERS_OF_XERIC);
++
++			// Assert — the chosen activity must reach the HTTP client
++			verify(mockGroupFinderClient).getGroups(Activity.CHAMBERS_OF_XERIC);
++		}
++
++		@Test
++		void nullActivity_passesNullToClient()
++		{
++			// Arrange — "All Activities" selected in UI
++			when(mockGroupFinderClient.getGroups(null)).thenReturn(List.of());
++
++			// Act
++			plugin.onFilterChanged(null);
++
++			// Assert
++			verify(mockGroupFinderClient).getGroups(null);
++		}
++
++		@Test
++		void updatesPanel_afterFilterChange()
++		{
++			// Arrange
++			List<GroupListing> filtered = List.of(GroupListingFixture.listing());
++			when(mockGroupFinderClient.getGroups(Activity.NEX)).thenReturn(filtered);
++
++			// Act
++			plugin.onFilterChanged(Activity.NEX);
++
++			// Assert
++			verify(mockPanel).updateListings(filtered);
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// onFriendsChatChanged
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class OnFriendsChatChanged
++	{
++		@Test
++		void joined_setsInFriendsChatTrue()
++		{
++			// Arrange
++			FriendsChatChanged event = new FriendsChatChanged(true);
++
++			// Act
++			plugin.onFriendsChatChanged(event);
++
++			// Assert
++			assertThat(plugin.isInFriendsChat()).isTrue();
++		}
++
++		@Test
++		void left_setsInFriendsChatFalse() throws Exception
++		{
++			// Arrange — start in a joined state, then leave
++			inject("inFriendsChat", true);
++			FriendsChatChanged leaveEvent = new FriendsChatChanged(false);
++
++			// Act
++			plugin.onFriendsChatChanged(leaveEvent);
++
++			// Assert
++			assertThat(plugin.isInFriendsChat()).isFalse();
++		}
++
++		@Test
++		void joined_invokesRegisteredCallback() throws Exception
++		{
++			// Arrange
++			Runnable mockCallback = mock(Runnable.class);
++			plugin.setFcStatusCallback(mockCallback);
++			FriendsChatChanged joinEvent = new FriendsChatChanged(true);
++
++			// Act
++			plugin.onFriendsChatChanged(joinEvent);
++			// Flush the EDT invokeLater call
++			javax.swing.SwingUtilities.invokeAndWait(() -> {});
++
++			// Assert
++			verify(mockCallback).run();
++		}
++
++		@Test
++		void noCallback_doesNotThrow()
++		{
++			// Arrange — no callback registered (null)
++			plugin.setFcStatusCallback(null);
++			FriendsChatChanged event = new FriendsChatChanged(true);
++
++			// Act — must not throw NullPointerException
++			plugin.onFriendsChatChanged(event);
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// onGameStateChanged
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class OnGameStateChanged
++	{
++		@ParameterizedTest
++		@EnumSource(value = GameState.class, names = {"LOGIN_SCREEN", "HOPPING"})
++		void disconnectingStates_clearInFriendsChat(GameState state) throws Exception
++		{
++			// Arrange — plugin starts out with inFriendsChat = true
++			inject("inFriendsChat", true);
++			GameStateChanged event = new GameStateChanged(state);
++
++			// Act
++			plugin.onGameStateChanged(event);
++
++			// Assert
++			assertThat(plugin.isInFriendsChat()).isFalse();
++		}
++
++		@Test
++		void loggedIn_doesNotClearInFriendsChat() throws Exception
++		{
++			// Arrange — player is in FC, then game state changes to LOGGED_IN
++			inject("inFriendsChat", true);
++			GameStateChanged event = new GameStateChanged(GameState.LOGGED_IN);
++
++			// Act
++			plugin.onGameStateChanged(event);
++
++			// Assert — LOGGED_IN must not touch the FC flag
++			assertThat(plugin.isInFriendsChat()).isTrue();
++		}
++
++		@Test
++		void loading_doesNotClearInFriendsChat() throws Exception
++		{
++			// Arrange
++			inject("inFriendsChat", true);
++			GameStateChanged event = new GameStateChanged(GameState.LOADING);
++
++			// Act
++			plugin.onGameStateChanged(event);
++
++			// Assert
++			assertThat(plugin.isInFriendsChat()).isTrue();
++		}
++
++		@Test
++		void loginScreen_invokesCallback() throws Exception
++		{
++			// Arrange
++			Runnable mockCallback = mock(Runnable.class);
++			inject("inFriendsChat", true);
++			plugin.setFcStatusCallback(mockCallback);
++			GameStateChanged event = new GameStateChanged(GameState.LOGIN_SCREEN);
++
++			// Act
++			plugin.onGameStateChanged(event);
++			javax.swing.SwingUtilities.invokeAndWait(() -> {});
++
++			// Assert
++			verify(mockCallback).run();
++		}
++
++		@Test
++		void loggedIn_doesNotInvokeCallback() throws Exception
++		{
++			// Arrange — callback registered but state doesn't trigger it
++			Runnable mockCallback = mock(Runnable.class);
++			plugin.setFcStatusCallback(mockCallback);
++			GameStateChanged event = new GameStateChanged(GameState.LOGGED_IN);
++
++			// Act
++			plugin.onGameStateChanged(event);
++			javax.swing.SwingUtilities.invokeAndWait(() -> {});
++
++			// Assert — callback must NOT be invoked for LOGGED_IN
++			verify(mockCallback, never()).run();
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// joinFriendsChat
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class JoinFriendsChat
++	{
++		@Test
++		void nullFcName_doesNothing()
++		{
++			// Arrange + Act — null FC name must be silently ignored
++			plugin.joinFriendsChat(null);
++
++			// Assert — clientThread must not be involved at all
++			verifyNoInteractions(mockClientThread);
++		}
++
++		@ParameterizedTest
++		@ValueSource(strings = {"", "  "})
++		void emptyOrBlankFcName_doesNothing(String name)
++		{
++			// Arrange + Act
++			plugin.joinFriendsChat(name);
++
++			// Assert
++			verifyNoInteractions(mockClientThread);
++		}
++
++		@Test
++		void whenNotLoggedIn_doesNotDispatchKeys()
++		{
++			// Arrange
++			makeClientThreadSynchronous();
++			when(mockClient.getGameState()).thenReturn(GameState.LOGIN_SCREEN);
++
++			// Act
++			plugin.joinFriendsChat("SomeFC");
++
++			// Assert — game state check blocks key dispatch; canvas must not be touched
++			// We verify that the widget was never looked up (short-circuit)
++			verify(mockClient, never()).getWidget(162, 42);
++		}
++
++		@Test
++		void whenLoggedIn_andDialogAbsent_showsGuideMessage()
++		{
++			// Arrange
++			makeClientThreadSynchronous();
++			when(mockClient.getGameState()).thenReturn(GameState.LOGGED_IN);
++			// Widget 162,42 = Chatbox.MES_TEXT — null means dialog is not open
++			when(mockClient.getWidget(162, 42)).thenReturn(null);
++
++			// Act
++			plugin.joinFriendsChat("SomeFC");
++
++			// Assert — guide message must be queued in chat
++			verify(mockChatMessageManager).queue(any());
++		}
++
++		@Test
++		void whenLoggedIn_andDialogOpen_doesNotShowGuideMessage()
++		{
++			// Arrange
++			makeClientThreadSynchronous();
++			when(mockClient.getGameState()).thenReturn(GameState.LOGGED_IN);
++
++			Widget mockWidget = mock(Widget.class);
++			when(mockWidget.isHidden()).thenReturn(false);
++			when(mockWidget.getText()).thenReturn("Enter the player name");
++			// Widget 162,42 = Chatbox.MES_TEXT = FC join dialog label
++			when(mockClient.getWidget(162, 42)).thenReturn(mockWidget);
++			when(mockClient.getCanvas()).thenReturn(new java.awt.Canvas());
++
++			// Act
++			plugin.joinFriendsChat("SomeFC");
++			// Note: the key dispatch happens on the EDT, but we don't need to wait for it
++			// because the assertion is about the guide message NOT being queued.
++
++			// Assert — dialog is open, so no guide message
++			verifyNoInteractions(mockChatMessageManager);
++		}
++
++		@Test
++		void whenLoggedIn_andDialogHidden_showsGuideMessage()
++		{
++			// Arrange
++			makeClientThreadSynchronous();
++			when(mockClient.getGameState()).thenReturn(GameState.LOGGED_IN);
++
++			Widget mockWidget = mock(Widget.class);
++			when(mockWidget.isHidden()).thenReturn(true); // hidden = dialog not open
++			when(mockClient.getWidget(162, 42)).thenReturn(mockWidget);
++
++			// Act
++			plugin.joinFriendsChat("SomeFC");
++
++			// Assert
++			verify(mockChatMessageManager).queue(any());
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// getLocalPlayerName
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class GetLocalPlayerName
++	{
++		@Test
++		void whenPlayerPresent_returnsNormalizedName()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn("Bob\u00A0Smith");
++
++			// Act
++			String result = plugin.getLocalPlayerName();
++
++			// Assert
++			assertThat(result).isEqualTo("Bob Smith");
++		}
++
++		@Test
++		void whenPlayerNull_returnsNull()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(null);
++
++			// Act
++			String result = plugin.getLocalPlayerName();
++
++			// Assert
++			assertThat(result).isNull();
++		}
++
++		@Test
++		void whenPlayerNameNull_returnsNull()
++		{
++			// Arrange
++			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
++			when(mockPlayer.getName()).thenReturn(null);
++
++			// Act
++			String result = plugin.getLocalPlayerName();
++
++			// Assert
++			assertThat(result).isNull();
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// setFcStatusCallback / isInFriendsChat
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class FcStatusCallback
++	{
++		@Test
++		void setFcStatusCallback_replacesExistingCallback()
++		{
++			// Arrange
++			Runnable first = mock(Runnable.class);
++			Runnable second = mock(Runnable.class);
++			plugin.setFcStatusCallback(first);
++
++			// Act
++			plugin.setFcStatusCallback(second);
++			FriendsChatChanged event = new FriendsChatChanged(true);
++			plugin.onFriendsChatChanged(event);
++
++			// Flush EDT
++			try
++			{
++				javax.swing.SwingUtilities.invokeAndWait(() -> {});
++			}
++			catch (Exception ignored)
++			{
++			}
++
++			// Assert — only the second callback should have run
++			verify(second).run();
++			verify(first, never()).run();
++		}
++
++		@Test
++		void setFcStatusCallback_toNull_disablesCallback()
++		{
++			// Arrange
++			Runnable mockCallback = mock(Runnable.class);
++			plugin.setFcStatusCallback(mockCallback);
++			plugin.setFcStatusCallback(null);
++
++			// Act
++			plugin.onFriendsChatChanged(new FriendsChatChanged(true));
++
++			// Assert — null callback must not throw and must not call the old one
++			verify(mockCallback, never()).run();
++		}
++	}
++}
+diff --git a/src/test/java/com/groupfinder/GroupListingFixture.java b/src/test/java/com/groupfinder/GroupListingFixture.java
+new file mode 100644
+index 0000000..bc3babf
+--- /dev/null
++++ b/src/test/java/com/groupfinder/GroupListingFixture.java
+@@ -0,0 +1,66 @@
++/*
++ * Copyright (c) 2025, galst
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++package com.groupfinder;
++
++/**
++ * Test-only factory for {@link GroupListing} instances with sensible defaults.
++ * Lives in src/test only — never shipped to production.
++ */
++final class GroupListingFixture
++{
++	private GroupListingFixture()
++	{
++	}
++
++	/** Returns a fully populated GroupListing suitable for use in tests. */
++	static GroupListing listing()
++	{
++		GroupListing g = new GroupListing();
++		g.setId("test-id-1");
++		g.setPlayerName("Alice");
++		g.setFriendsChatName("AliceFC");
++		g.setActivity(Activity.CHAMBERS_OF_XERIC);
++		g.setCurrentSize(1);
++		g.setMaxSize(3);
++		g.setDescription("Test listing");
++		return g;
++	}
++
++	/** Returns a listing with a specific player name (useful for ownership tests). */
++	static GroupListing listingFor(String playerName)
++	{
++		GroupListing g = listing();
++		g.setPlayerName(playerName);
++		return g;
++	}
++
++	/** Returns a listing with the given id. */
++	static GroupListing listingWithId(String id)
++	{
++		GroupListing g = listing();
++		g.setId(id);
++		return g;
++	}
++}
+diff --git a/src/test/java/com/groupfinder/client/GroupFinderClientTest.java b/src/test/java/com/groupfinder/client/GroupFinderClientTest.java
+new file mode 100644
+index 0000000..d5d8956
+--- /dev/null
++++ b/src/test/java/com/groupfinder/client/GroupFinderClientTest.java
+@@ -0,0 +1,487 @@
++/*
++ * Copyright (c) 2025, galst
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++package com.groupfinder.client;
++
++import com.google.gson.Gson;
++import com.groupfinder.Activity;
++import com.groupfinder.GroupFinderClient;
++import com.groupfinder.GroupFinderConfig;
++import com.groupfinder.GroupListing;
++import okhttp3.OkHttpClient;
++import okhttp3.mockwebserver.MockResponse;
++import okhttp3.mockwebserver.MockWebServer;
++import okhttp3.mockwebserver.RecordedRequest;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Nested;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.ValueSource;
++
++import java.io.IOException;
++import java.util.List;
++import java.util.Map;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++/**
++ * Level 3 – HTTP contract tests for {@link GroupFinderClient}.
++ * Uses OkHttp's {@link MockWebServer} for real TCP round-trips.
++ * No RuneLite, no plugin code involved.
++ */
++class GroupFinderClientTest
++{
++	private MockWebServer server;
++	private GroupFinderClient client;
++	private Gson gson;
++
++	@BeforeEach
++	void setUp() throws Exception
++	{
++		server = new MockWebServer();
++		server.start();
++
++		gson = new Gson();
++
++		GroupFinderConfig config = mock(GroupFinderConfig.class);
++		when(config.serverUrl()).thenReturn("http://localhost:" + server.getPort());
++
++		client = new GroupFinderClient(new OkHttpClient(), gson, config);
++	}
++
++	@AfterEach
++	void tearDown()
++	{
++		try
++		{
++			server.shutdown();
++		}
++		catch (IOException ignored)
++		{
++			// Harmless if already shut down (e.g., in network-failure tests)
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// getGroups
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class GetGroups
++	{
++		@Test
++		void withNullFilter_sendsGetWithNoQueryParam() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("[]").setResponseCode(200));
++
++			// Act
++			client.getGroups(null);
++
++			// Assert — no ?activity= param when filter is null
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getMethod()).isEqualTo("GET");
++			assertThat(request.getPath()).doesNotContain("activity");
++		}
++
++		@Test
++		void withActivityFilter_appendsQueryParam() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("[]").setResponseCode(200));
++
++			// Act
++			client.getGroups(Activity.CHAMBERS_OF_XERIC);
++
++			// Assert — enum name (not display name) is the query value
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getPath()).contains("activity=CHAMBERS_OF_XERIC");
++		}
++
++		@ParameterizedTest
++		@ValueSource(strings = {"CHAMBERS_OF_XERIC", "THEATRE_OF_BLOOD", "OTHER"})
++		void activityFilter_usesEnumName(String activityName) throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("[]").setResponseCode(200));
++			Activity activity = Activity.valueOf(activityName);
++
++			// Act
++			client.getGroups(activity);
++
++			// Assert
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getPath()).contains("activity=" + activityName);
++		}
++
++		@Test
++		void successfulResponse_isParsedIntoList() throws Exception
++		{
++			// Arrange
++			String body = "[{\"id\":\"1\",\"playerName\":\"Alice\","
++				+ "\"activity\":\"CHAMBERS_OF_XERIC\",\"currentSize\":1,\"maxSize\":3}]";
++			server.enqueue(new MockResponse().setBody(body).setResponseCode(200));
++
++			// Act
++			List<GroupListing> result = client.getGroups(null);
++
++			// Assert
++			assertThat(result).hasSize(1);
++			assertThat(result.get(0).getPlayerName()).isEqualTo("Alice");
++			assertThat(result.get(0).getActivity()).isEqualTo(Activity.CHAMBERS_OF_XERIC);
++		}
++
++		@Test
++		void emptyArrayResponse_returnsEmptyList() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("[]").setResponseCode(200));
++
++			// Act
++			List<GroupListing> result = client.getGroups(null);
++
++			// Assert
++			assertThat(result).isEmpty();
++		}
++
++		@ParameterizedTest
++		@ValueSource(ints = {400, 404, 500, 503})
++		void httpErrorResponse_returnsEmptyList(int statusCode) throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("error").setResponseCode(statusCode));
++
++			// Act
++			List<GroupListing> result = client.getGroups(null);
++
++			// Assert — client must absorb HTTP errors gracefully
++			assertThat(result).isEmpty();
++		}
++
++		@Test
++		void networkFailure_returnsEmptyList() throws IOException
++		{
++			// Arrange — shut down the server so the connection is refused
++			server.shutdown();
++
++			// Act — must not throw
++			List<GroupListing> result = client.getGroups(null);
++
++			// Assert
++			assertThat(result).isEmpty();
++		}
++
++		@Test
++		void malformedJson_propagatesException() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("not-json-at-all").setResponseCode(200));
++
++			// Act + Assert — malformed JSON must not be silently swallowed
++			assertThatThrownBy(() -> client.getGroups(null))
++				.isInstanceOf(RuntimeException.class);
++		}
++
++		@Test
++		void getGroupsPath_isCorrect() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("[]").setResponseCode(200));
++
++			// Act
++			client.getGroups(null);
++
++			// Assert
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getPath()).startsWith("/api/groups");
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// createGroup
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class CreateGroup
++	{
++		@Test
++		void sendsPostToCorrectPath() throws Exception
++		{
++			// Arrange
++			String responseBody = gson.toJson(buildListing("created-id", "Alice"));
++			server.enqueue(new MockResponse().setBody(responseBody).setResponseCode(200));
++
++			// Act
++			client.createGroup(buildListing(null, "Alice"));
++
++			// Assert
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getMethod()).isEqualTo("POST");
++			assertThat(request.getPath()).isEqualTo("/api/groups");
++		}
++
++		@Test
++		void requestBodyContainsPlayerName() throws Exception
++		{
++			// Arrange
++			String responseBody = gson.toJson(buildListing("created-id", "Alice"));
++			server.enqueue(new MockResponse().setBody(responseBody).setResponseCode(200));
++
++			// Act
++			client.createGroup(buildListing(null, "Alice"));
++
++			// Assert — verify the body fields, not an exact JSON string
++			RecordedRequest request = server.takeRequest();
++			String body = request.getBody().readUtf8();
++			@SuppressWarnings("unchecked")
++			Map<String, Object> parsed = gson.fromJson(body, Map.class);
++			assertThat(parsed).containsEntry("playerName", "Alice");
++		}
++
++		@Test
++		void successfulResponse_isParsedIntoListing() throws Exception
++		{
++			// Arrange
++			GroupListing expected = buildListing("new-id", "Bob");
++			server.enqueue(new MockResponse().setBody(gson.toJson(expected)).setResponseCode(200));
++
++			// Act
++			GroupListing result = client.createGroup(buildListing(null, "Bob"));
++
++			// Assert
++			assertThat(result).isNotNull();
++			assertThat(result.getId()).isEqualTo("new-id");
++			assertThat(result.getPlayerName()).isEqualTo("Bob");
++		}
++
++		@Test
++		void httpErrorResponse_returnsNull() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setBody("error").setResponseCode(500));
++
++			// Act
++			GroupListing result = client.createGroup(buildListing(null, "Alice"));
++
++			// Assert
++			assertThat(result).isNull();
++		}
++
++		@Test
++		void networkFailure_returnsNull() throws IOException
++		{
++			// Arrange
++			server.shutdown();
++
++			// Act — must not throw
++			GroupListing result = client.createGroup(buildListing(null, "Alice"));
++
++			// Assert
++			assertThat(result).isNull();
++		}
++
++		@Test
++		void requestBodyContainsActivityField() throws Exception
++		{
++			// Arrange
++			GroupListing listing = buildListing(null, "Alice");
++			listing.setActivity(Activity.THEATRE_OF_BLOOD);
++			server.enqueue(new MockResponse().setBody(gson.toJson(listing)).setResponseCode(200));
++
++			// Act
++			client.createGroup(listing);
++
++			// Assert
++			RecordedRequest request = server.takeRequest();
++			String body = request.getBody().readUtf8();
++			assertThat(body).contains("THEATRE_OF_BLOOD");
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// deleteGroup
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class DeleteGroup
++	{
++		@Test
++		void sendsDeleteToCorrectPath() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setResponseCode(200));
++
++			// Act
++			client.deleteGroup("group-99");
++
++			// Assert
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getMethod()).isEqualTo("DELETE");
++			assertThat(request.getPath()).isEqualTo("/api/groups/group-99");
++		}
++
++		@Test
++		void successfulDelete_returnsTrue() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setResponseCode(200));
++
++			// Act
++			boolean result = client.deleteGroup("group-1");
++
++			// Assert
++			assertThat(result).isTrue();
++		}
++
++		@Test
++		void httpErrorResponse_returnsFalse() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setResponseCode(404));
++
++			// Act
++			boolean result = client.deleteGroup("group-1");
++
++			// Assert
++			assertThat(result).isFalse();
++		}
++
++		@Test
++		void networkFailure_returnsFalse() throws IOException
++		{
++			// Arrange
++			server.shutdown();
++
++			// Act — must not throw
++			boolean result = client.deleteGroup("group-1");
++
++			// Assert
++			assertThat(result).isFalse();
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// updateGroup
++	// -------------------------------------------------------------------------
++
++	@Nested
++	class UpdateGroup
++	{
++		@Test
++		void sendsPatchToCorrectPath() throws Exception
++		{
++			// Arrange
++			GroupListing updated = buildListing("grp-5", "Alice");
++			server.enqueue(new MockResponse().setBody(gson.toJson(updated)).setResponseCode(200));
++
++			// Act
++			client.updateGroup("grp-5", Map.of("currentSize", 3));
++
++			// Assert
++			RecordedRequest request = server.takeRequest();
++			assertThat(request.getMethod()).isEqualTo("PATCH");
++			assertThat(request.getPath()).isEqualTo("/api/groups/grp-5");
++		}
++
++		@Test
++		void requestBodyContainsFields() throws Exception
++		{
++			// Arrange
++			GroupListing updated = buildListing("grp-5", "Alice");
++			server.enqueue(new MockResponse().setBody(gson.toJson(updated)).setResponseCode(200));
++
++			// Act
++			client.updateGroup("grp-5", Map.of("currentSize", 5));
++
++			// Assert — verify the field value is present
++			RecordedRequest request = server.takeRequest();
++			String body = request.getBody().readUtf8();
++			Map<?, ?> parsed = gson.fromJson(body, Map.class);
++			// Gson parses numbers as Double by default
++			assertThat(((Number) parsed.get("currentSize")).intValue()).isEqualTo(5);
++		}
++
++		@Test
++		void successfulResponse_isParsedIntoListing() throws Exception
++		{
++			// Arrange
++			GroupListing expected = buildListing("grp-5", "Alice");
++			expected.setCurrentSize(4);
++			server.enqueue(new MockResponse().setBody(gson.toJson(expected)).setResponseCode(200));
++
++			// Act
++			GroupListing result = client.updateGroup("grp-5", Map.of("currentSize", 4));
++
++			// Assert
++			assertThat(result).isNotNull();
++			assertThat(result.getCurrentSize()).isEqualTo(4);
++		}
++
++		@Test
++		void httpErrorResponse_returnsNull() throws Exception
++		{
++			// Arrange
++			server.enqueue(new MockResponse().setResponseCode(404));
++
++			// Act
++			GroupListing result = client.updateGroup("missing-id", Map.of("currentSize", 3));
++
++			// Assert
++			assertThat(result).isNull();
++		}
++
++		@Test
++		void networkFailure_returnsNull() throws IOException
++		{
++			// Arrange
++			server.shutdown();
++
++			// Act — must not throw
++			GroupListing result = client.updateGroup("grp-5", Map.of("currentSize", 3));
++
++			// Assert
++			assertThat(result).isNull();
++		}
++	}
++
++	// -------------------------------------------------------------------------
++	// Helpers
++	// -------------------------------------------------------------------------
++
++	private static GroupListing buildListing(String id, String playerName)
++	{
++		GroupListing g = new GroupListing();
++		g.setId(id);
++		g.setPlayerName(playerName);
++		g.setFriendsChatName(playerName + "FC");
++		g.setActivity(Activity.CHAMBERS_OF_XERIC);
++		g.setCurrentSize(1);
++		g.setMaxSize(3);
++		return g;
++	}
++}
+diff --git a/src/test/java/com/groupfinder/unit/ActivityTest.java b/src/test/java/com/groupfinder/unit/ActivityTest.java
+new file mode 100644
+index 0000000..95a4750
+--- /dev/null
++++ b/src/test/java/com/groupfinder/unit/ActivityTest.java
+@@ -0,0 +1,95 @@
++/*
++ * Copyright (c) 2025, galst
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++package com.groupfinder.unit;
++
++import com.groupfinder.Activity;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.EnumSource;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/**
++ * Level 1 – Pure unit tests for the {@link Activity} enum.
++ * No RuneLite, no network, no mocks needed.
++ */
++class ActivityTest
++{
++	@ParameterizedTest
++	@EnumSource(Activity.class)
++	void toString_equalsDisplayName(Activity activity)
++	{
++		// toString() must return the human-readable displayName, not the constant name.
++		assertThat(activity.toString()).isEqualTo(activity.getDisplayName());
++	}
++
++	@ParameterizedTest
++	@EnumSource(Activity.class)
++	void displayName_isNeitherNullNorBlank(Activity activity)
++	{
++		assertThat(activity.getDisplayName())
++			.as("displayName for %s must not be null or blank", activity.name())
++			.isNotNull()
++			.isNotBlank();
++	}
++
++	@ParameterizedTest
++	@EnumSource(Activity.class)
++	void toString_isNotEnumConstantName(Activity activity)
++	{
++		// Ensures toString() is overridden: "Chambers of Xeric", not "CHAMBERS_OF_XERIC".
++		assertThat(activity.toString()).doesNotContain("_");
++	}
++
++	@Test
++	void chambersOfXeric_hasExpectedDisplayName()
++	{
++		assertThat(Activity.CHAMBERS_OF_XERIC.getDisplayName()).isEqualTo("Chambers of Xeric");
++	}
++
++	@Test
++	void theatreOfBlood_hasExpectedDisplayName()
++	{
++		assertThat(Activity.THEATRE_OF_BLOOD.getDisplayName()).isEqualTo("Theatre of Blood");
++	}
++
++	@Test
++	void other_hasExpectedDisplayName()
++	{
++		assertThat(Activity.OTHER.getDisplayName()).isEqualTo("Other");
++	}
++
++	@Test
++	void barbarian_hasExpectedDisplayName()
++	{
++		assertThat(Activity.BARBARIAN_ASSAULT.getDisplayName()).isEqualTo("Barbarian Assault");
++	}
++
++	@Test
++	void nex_hasExpectedDisplayName()
++	{
++		assertThat(Activity.NEX.getDisplayName()).isEqualTo("Nex");
++	}
++}
