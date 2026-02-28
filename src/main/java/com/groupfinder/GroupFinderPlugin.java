@@ -201,7 +201,7 @@ public class GroupFinderPlugin extends Plugin
 
 		if (config.groupManagementMode() == GroupManagementMode.FRIENDS_CHAT)
 		{
-			if (currentFcName == null)
+			if (currentFcName == null || currentFcName.isEmpty())
 			{
 				panel.showError("Join a Friends Chat before creating a group");
 				return;
