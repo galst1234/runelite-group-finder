@@ -180,6 +180,7 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 	{
 		String localName = plugin.getLocalPlayerName();
 		boolean isOwn = localName != null && localName.equals(listing.getPlayerName());
+		boolean isFcMode = plugin.getGroupManagementMode() == GroupManagementMode.FRIENDS_CHAT;
 
 		JPanel card = new JPanel(new BorderLayout());
 		card.setBackground(isOwn ? ColorScheme.DARKER_GRAY_HOVER_COLOR : ColorScheme.DARKER_GRAY_COLOR);
@@ -302,16 +303,20 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 			});
 			buttonPanel.add(copyButton);
 
-			JButton joinFcButton = new JButton("Join FC");
-			joinFcButton.setPreferredSize(new Dimension(90, 25));
-			joinFcButton.setMaximumSize(new Dimension(90, 25));
-			String fcName = listing.getFriendsChatName();
-			joinFcButton.setToolTipText(fcName != null && !fcName.isEmpty()
-				? "Join " + fcName + "'s Friends Chat"
-				: "No Friends Chat name available");
-			joinFcButton.setEnabled(fcName != null && !fcName.isEmpty());
-			joinFcButton.addActionListener(e -> plugin.joinFriendsChat(fcName));
-			buttonPanel.add(joinFcButton);
+			// Join FC button only shown in Friends Chat mode
+			if (isFcMode)
+			{
+				JButton joinFcButton = new JButton("Join FC");
+				joinFcButton.setPreferredSize(new Dimension(90, 25));
+				joinFcButton.setMaximumSize(new Dimension(90, 25));
+				String fcName = listing.getFriendsChatName();
+				joinFcButton.setToolTipText(fcName != null && !fcName.isEmpty()
+					? "Join " + fcName + "'s Friends Chat"
+					: "No Friends Chat name available");
+				joinFcButton.setEnabled(fcName != null && !fcName.isEmpty());
+				joinFcButton.addActionListener(e -> plugin.joinFriendsChat(fcName));
+				buttonPanel.add(joinFcButton);
+			}
 		}
 
 		card.add(buttonPanel, BorderLayout.EAST);
@@ -321,13 +326,38 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 
 	private void showCreateDialog()
 	{
-		JLabel fcWarningLabel = new JLabel("⚠ You are not in a Friends Chat. Join one first!");
-		fcWarningLabel.setForeground(new Color(255, 180, 0));
-		fcWarningLabel.setVisible(!plugin.isInFriendsChat());
+		boolean fcMode = plugin.getGroupManagementMode() == GroupManagementMode.FRIENDS_CHAT;
 
-		plugin.setFcStatusCallback(() -> fcWarningLabel.setVisible(!plugin.isInFriendsChat()));
+		JPanel wrapperPanel = new JPanel();
+		wrapperPanel.setLayout(new BoxLayout(wrapperPanel, BoxLayout.Y_AXIS));
 
-		JPanel formPanel = new JPanel(new GridLayout(4, 2, 5, 5));
+		// FC-mode-specific labels (captured for use in callback)
+		final JLabel fcWarningLabel;
+		final JTextField fcNameField;
+		final JSpinner currentSizeSpinner;
+
+		if (fcMode)
+		{
+			// (i) info label
+			JLabel infoLabel = new JLabel(
+				"\u24d8 Friends chat info will be automatically sent to the server and be available to all");
+			infoLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			wrapperPanel.add(infoLabel);
+
+			// Warning when not in FC
+			fcWarningLabel = new JLabel("\u26a0 You are not in a Friends Chat. Join one first!");
+			fcWarningLabel.setForeground(new Color(255, 180, 0));
+			fcWarningLabel.setVisible(!plugin.isInFriendsChat());
+			wrapperPanel.add(fcWarningLabel);
+		}
+		else
+		{
+			fcWarningLabel = null;
+		}
+
+		// Form rows: 5 in FC mode (adds Friends Chat row), 4 in Manual mode
+		int rows = fcMode ? 5 : 4;
+		JPanel formPanel = new JPanel(new GridLayout(rows, 2, 5, 5));
 
 		formPanel.add(new JLabel("Activity:"));
 		JComboBox<Activity> activityBox = new JComboBox<>(Activity.values());
@@ -338,17 +368,54 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 		formPanel.add(maxSizeSpinner);
 
 		formPanel.add(new JLabel("Current Size:"));
-		JSpinner currentSizeSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 100, 1));
+		if (fcMode)
+		{
+			int fcCount = Math.max(1, plugin.getCurrentFcMemberCount());
+			currentSizeSpinner = new JSpinner(new SpinnerNumberModel(fcCount, 1, 100, 1));
+			currentSizeSpinner.setEnabled(false);
+
+			fcNameField = new JTextField();
+			String fcName = plugin.getCurrentFcName();
+			fcNameField.setText("FC: " + (fcName != null ? fcName : "(not in FC)"));
+			fcNameField.setEnabled(false);
+		}
+		else
+		{
+			currentSizeSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 100, 1));
+			fcNameField = null;
+		}
 		formPanel.add(currentSizeSpinner);
+
+		if (fcMode)
+		{
+			formPanel.add(new JLabel("Friends Chat:"));
+			formPanel.add(fcNameField);
+		}
 
 		formPanel.add(new JLabel("Description:"));
 		JTextField descField = new JTextField();
 		formPanel.add(descField);
 
-		JPanel wrapperPanel = new JPanel();
-		wrapperPanel.setLayout(new BoxLayout(wrapperPanel, BoxLayout.Y_AXIS));
-		wrapperPanel.add(fcWarningLabel);
 		wrapperPanel.add(formPanel);
+
+		// Set up live-update callback in FC mode
+		if (fcMode)
+		{
+			plugin.setFcStatusCallback(() ->
+			{
+				int count = Math.max(1, plugin.getCurrentFcMemberCount());
+				currentSizeSpinner.setValue(count);
+				if (fcWarningLabel != null)
+				{
+					fcWarningLabel.setVisible(!plugin.isInFriendsChat());
+				}
+				if (fcNameField != null)
+				{
+					String name = plugin.getCurrentFcName();
+					fcNameField.setText("FC: " + (name != null ? name : "(not in FC)"));
+				}
+			});
+		}
 
 		int result = JOptionPane.showConfirmDialog(
 			this,

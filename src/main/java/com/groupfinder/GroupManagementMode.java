@@ -24,41 +24,21 @@
  */
 package com.groupfinder;
 
-import net.runelite.client.config.Config;
-import net.runelite.client.config.ConfigGroup;
-import net.runelite.client.config.ConfigItem;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 
-@ConfigGroup("groupfinder")
-public interface GroupFinderConfig extends Config
+@Getter
+@RequiredArgsConstructor
+public enum GroupManagementMode
 {
-	@ConfigItem(
-		keyName = "serverUrl",
-		name = "Server URL",
-		description = "URL of the Group Finder backend server"
-	)
-	default String serverUrl()
-	{
-		return "http://localhost:8000";
-	}
+	MANUAL("Manual"),
+	FRIENDS_CHAT("Friends Chat");
 
-	@ConfigItem(
-		keyName = "pollInterval",
-		name = "Poll Interval (seconds)",
-		description = "How often to refresh group listings"
-	)
-	default int pollInterval()
-	{
-		return 15;
-	}
+	private final String displayName;
 
-	@ConfigItem(
-		keyName = "groupManagementMode",
-		name = "Group Management",
-		description = "Manual: create groups without Friends Chat. "
-			+ "Friends Chat: FC name and size are automatically managed."
-	)
-	default GroupManagementMode groupManagementMode()
+	@Override
+	public String toString()
 	{
-		return GroupManagementMode.MANUAL;
+		return displayName;
 	}
 }

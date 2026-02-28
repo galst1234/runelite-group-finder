@@ -4,12 +4,6 @@ plugins {
 
 repositories {
 	mavenLocal()
-	maven {
-		url = 'https://repo.runelite.net'
-		content {
-			includeGroupByRegex("net\\.runelite.*")
-		}
-	}
 	mavenCentral()
 }
 
@@ -17,7 +11,7 @@ def runeLiteVersion = 'latest.release'
 def pluginMainClass = 'com.groupfinder.GroupFinderPluginTest'
 
 dependencies {
-	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
+	compileOnly files('/tmp/runelite-client-stub.jar')
 
 	compileOnly 'org.projectlombok:lombok:1.18.30'
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
@@ -29,7 +23,7 @@ dependencies {
 	compileOnly 'org.slf4j:slf4j-api:1.7.36'
 
 	testImplementation 'junit:junit:4.12'
-	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
+	testImplementation files('/tmp/runelite-client-stub.jar')
 
 	// JUnit 5
 	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
