@@ -737,6 +737,7 @@ class GroupFinderPluginBehaviorTest
 		{
 			// Arrange
 			inject("activeGroupId", "group-abc");
+			inject("activeGroupMaxSize", 10);
 			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
 			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[3]);
 			when(mockGroupFinderClient.updateGroup(eq("group-abc"), any())).thenReturn(GroupListingFixture.listing());
@@ -758,6 +759,7 @@ class GroupFinderPluginBehaviorTest
 		{
 			// Arrange
 			inject("activeGroupId", "group-abc");
+			inject("activeGroupMaxSize", 10);
 			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
 			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[2]);
 			when(mockGroupFinderClient.updateGroup(eq("group-abc"), any())).thenReturn(GroupListingFixture.listing());
@@ -789,6 +791,28 @@ class GroupFinderPluginBehaviorTest
 
 			// Assert — no update sent in manual mode
 			verify(mockGroupFinderClient, never()).updateGroup(any(), any());
+		}
+
+		@Test
+		void whenFcCountExceedsGroupMaxSize_autoUpdateClampsToMaxSize() throws Exception
+		{
+			// Arrange — FC has 8 members but the group cap is 5
+			inject("activeGroupId", "group-abc");
+			inject("activeGroupMaxSize", 5);
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[8]);
+			when(mockGroupFinderClient.updateGroup(eq("group-abc"), any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.onFriendsChatMemberJoined(mock(FriendsChatMemberJoined.class));
+			SwingUtilities.invokeAndWait(() -> {});
+
+			// Assert — currentSize must not exceed the group's maxSize
+			verify(mockGroupFinderClient).updateGroup(
+				eq("group-abc"),
+				argThat((Map<String, Object> m) -> Integer.valueOf(5).equals(m.get("currentSize")))
+			);
 		}
 
 		@Test

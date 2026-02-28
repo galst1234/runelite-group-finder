@@ -367,7 +367,8 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 		int maxDefault = fcMode ? Math.max(4, fcCount) : 4;
 
 		formPanel.add(new JLabel("Max Size:"));
-		JSpinner maxSizeSpinner = new JSpinner(new SpinnerNumberModel(maxDefault, 2, 100, 1));
+		int maxMin = fcMode ? Math.max(2, fcCount) : 2;
+		JSpinner maxSizeSpinner = new JSpinner(new SpinnerNumberModel(maxDefault, maxMin, 100, 1));
 		formPanel.add(maxSizeSpinner);
 
 		formPanel.add(new JLabel("Current Size:"));
@@ -405,8 +406,15 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 		{
 			plugin.setFcStatusCallback(() ->
 			{
-				int count = Math.max(1, plugin.getCurrentFcMemberCount());
+				int count = Math.min(100, Math.max(1, plugin.getCurrentFcMemberCount()));
 				currentSizeSpinner.setValue(count);
+				SpinnerNumberModel maxModel = (SpinnerNumberModel) maxSizeSpinner.getModel();
+				int newMin = Math.max(2, count);
+				maxModel.setMinimum(newMin);
+				if ((int) maxSizeSpinner.getValue() < newMin)
+				{
+					maxSizeSpinner.setValue(newMin);
+				}
 				if (fcWarningLabel != null)
 				{
 					fcWarningLabel.setVisible(!plugin.isInFriendsChat());

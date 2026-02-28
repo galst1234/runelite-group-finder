@@ -92,6 +92,7 @@ public class GroupFinderPlugin extends Plugin
 	private volatile String currentFcName;
 	private volatile int currentFcMemberCount;
 	private volatile String activeGroupId;
+	private volatile int activeGroupMaxSize;
 
 	@Override
 	protected void startUp() throws Exception
@@ -214,6 +215,7 @@ public class GroupFinderPlugin extends Plugin
 			GroupListing created = groupFinderClient.createGroup(listing);
 			if (created != null)
 			{
+				activeGroupMaxSize = created.getMaxSize();
 				activeGroupId = created.getId();
 				pollGroups();
 			}
@@ -234,6 +236,7 @@ public class GroupFinderPlugin extends Plugin
 				if (id != null && id.equals(activeGroupId))
 				{
 					activeGroupId = null;
+					activeGroupMaxSize = 0;
 				}
 				pollGroups();
 			}
@@ -443,6 +446,7 @@ public class GroupFinderPlugin extends Plugin
 			currentFcName = null;
 			currentFcMemberCount = 0;
 			activeGroupId = null;
+			activeGroupMaxSize = 0;
 			Runnable cb = fcStatusCallback;
 			if (cb != null)
 			{
@@ -465,6 +469,10 @@ public class GroupFinderPlugin extends Plugin
 		if (config.groupManagementMode() == GroupManagementMode.FRIENDS_CHAT && activeGroupId != null)
 		{
 			int size = Math.min(100, Math.max(1, currentFcMemberCount));
+			if (activeGroupMaxSize > 0)
+			{
+				size = Math.min(size, activeGroupMaxSize);
+			}
 			updateGroupSize(activeGroupId, size);
 		}
 	}
