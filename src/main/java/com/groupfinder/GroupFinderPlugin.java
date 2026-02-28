@@ -43,10 +43,13 @@ import net.runelite.api.GameState;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.Player;
 import net.runelite.api.events.FriendsChatChanged;
+import net.runelite.api.events.FriendsChatMemberJoined;
+import net.runelite.api.events.FriendsChatMemberLeft;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
@@ -86,6 +89,10 @@ public class GroupFinderPlugin extends Plugin
 	private Activity currentFilter;
 	private volatile boolean inFriendsChat;
 	private volatile Runnable fcStatusCallback;
+	private volatile String currentFcName;
+	private volatile int currentFcMemberCount;
+	private volatile String activeGroupId;
+	private volatile int activeGroupMaxSize;
 
 	@Override
 	protected void startUp() throws Exception
@@ -107,7 +114,16 @@ public class GroupFinderPlugin extends Plugin
 		executorService = Executors.newSingleThreadScheduledExecutor();
 		startPolling();
 
-		clientThread.invokeLater(() -> inFriendsChat = client.getFriendsChatManager() != null);
+		clientThread.invokeLater(() ->
+		{
+			inFriendsChat = client.getFriendsChatManager() != null;
+			FriendsChatManager fcm = client.getFriendsChatManager();
+			if (fcm != null)
+			{
+				currentFcName = normalizeName(fcm.getOwner());
+				currentFcMemberCount = fcm.getMembers().length;
+			}
+		});
 
 		log.debug("Group Finder started");
 	}
@@ -184,19 +200,23 @@ public class GroupFinderPlugin extends Plugin
 			return;
 		}
 
-		FriendsChatManager fcm = client.getFriendsChatManager();
-		if (fcm == null)
+		if (config.groupManagementMode() == GroupManagementMode.FRIENDS_CHAT)
 		{
-			panel.showError("Join a Friends Chat before creating a group");
-			return;
+			if (currentFcName == null || currentFcName.isEmpty())
+			{
+				panel.showError("Join a Friends Chat before creating a group");
+				return;
+			}
+			listing.setFriendsChatName(normalizeName(currentFcName));
 		}
-		listing.setFriendsChatName(normalizeName(fcm.getOwner()));
 
 		executorService.execute(() ->
 		{
 			GroupListing created = groupFinderClient.createGroup(listing);
 			if (created != null)
 			{
+				activeGroupMaxSize = created.getMaxSize();
+				activeGroupId = created.getId();
 				pollGroups();
 			}
 			else
@@ -213,6 +233,11 @@ public class GroupFinderPlugin extends Plugin
 			boolean deleted = groupFinderClient.deleteGroup(id);
 			if (deleted)
 			{
+				if (id != null && id.equals(activeGroupId))
+				{
+					activeGroupId = null;
+					activeGroupMaxSize = 0;
+				}
 				pollGroups();
 			}
 			else
@@ -329,6 +354,26 @@ public class GroupFinderPlugin extends Plugin
 		return inFriendsChat;
 	}
 
+	GroupManagementMode getGroupManagementMode()
+	{
+		return config.groupManagementMode();
+	}
+
+	String getCurrentFcName()
+	{
+		return currentFcName;
+	}
+
+	int getCurrentFcMemberCount()
+	{
+		return currentFcMemberCount;
+	}
+
+	String getActiveGroupId()
+	{
+		return activeGroupId;
+	}
+
 	void setFcStatusCallback(Runnable r)
 	{
 		fcStatusCallback = r;
@@ -338,11 +383,57 @@ public class GroupFinderPlugin extends Plugin
 	public void onFriendsChatChanged(FriendsChatChanged event)
 	{
 		inFriendsChat = event.isJoined();
+		if (event.isJoined())
+		{
+			FriendsChatManager fcm = client.getFriendsChatManager();
+			if (fcm != null)
+			{
+				currentFcName = normalizeName(fcm.getOwner());
+				currentFcMemberCount = fcm.getMembers().length;
+			}
+		}
+		else
+		{
+			currentFcName = null;
+			currentFcMemberCount = 0;
+		}
 		Runnable cb = fcStatusCallback;
 		if (cb != null)
 		{
 			SwingUtilities.invokeLater(cb);
 		}
+	}
+
+	@Subscribe
+	public void onFriendsChatMemberJoined(FriendsChatMemberJoined event)
+	{
+		FriendsChatManager fcm = client.getFriendsChatManager();
+		if (fcm != null)
+		{
+			currentFcMemberCount = fcm.getMembers().length;
+		}
+		Runnable cb = fcStatusCallback;
+		if (cb != null)
+		{
+			SwingUtilities.invokeLater(cb);
+		}
+		autoUpdateGroupSize();
+	}
+
+	@Subscribe
+	public void onFriendsChatMemberLeft(FriendsChatMemberLeft event)
+	{
+		FriendsChatManager fcm = client.getFriendsChatManager();
+		if (fcm != null)
+		{
+			currentFcMemberCount = fcm.getMembers().length;
+		}
+		Runnable cb = fcStatusCallback;
+		if (cb != null)
+		{
+			SwingUtilities.invokeLater(cb);
+		}
+		autoUpdateGroupSize();
 	}
 
 	@Subscribe
@@ -352,11 +443,37 @@ public class GroupFinderPlugin extends Plugin
 			|| event.getGameState() == GameState.HOPPING)
 		{
 			inFriendsChat = false;
+			currentFcName = null;
+			currentFcMemberCount = 0;
+			activeGroupId = null;
+			activeGroupMaxSize = 0;
 			Runnable cb = fcStatusCallback;
 			if (cb != null)
 			{
 				SwingUtilities.invokeLater(cb);
 			}
+		}
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if ("groupfinder".equals(event.getGroup()) && "groupManagementMode".equals(event.getKey()))
+		{
+			refreshListings();
+		}
+	}
+
+	private void autoUpdateGroupSize()
+	{
+		if (config.groupManagementMode() == GroupManagementMode.FRIENDS_CHAT && activeGroupId != null)
+		{
+			int size = Math.min(100, Math.max(1, currentFcMemberCount));
+			if (activeGroupMaxSize > 0)
+			{
+				size = Math.min(size, activeGroupMaxSize);
+			}
+			updateGroupSize(activeGroupId, size);
 		}
 	}
 

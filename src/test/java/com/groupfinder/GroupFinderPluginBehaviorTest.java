@@ -3,14 +3,18 @@ package com.groupfinder;
 import java.lang.reflect.Field;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import javax.swing.SwingUtilities;
 
 import net.runelite.api.Client;
 import net.runelite.api.FriendsChatManager;
+import net.runelite.api.FriendsChatMember;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.events.FriendsChatChanged;
+import net.runelite.api.events.FriendsChatMemberJoined;
+import net.runelite.api.events.FriendsChatMemberLeft;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
@@ -22,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -29,6 +34,7 @@ import org.mockito.quality.Strictness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -38,7 +44,9 @@ import static org.mockito.Mockito.when;
 
 // LENIENT: executorService and clientThread doAnswer stubs in @BeforeEach are
 // intentionally unused in tests that never reach an async code path (e.g. early-return
-// guard tests). Per-test stubs inside @Test bodies are always used.
+// guard tests). The groupManagementMode stub defaults to FRIENDS_CHAT so existing FC
+// tests pass without per-test overrides; tests for MANUAL mode override it explicitly.
+// Per-test stubs inside @Test bodies are always used.
 @MockitoSettings(strictness = Strictness.LENIENT)
 @ExtendWith(MockitoExtension.class)
 class GroupFinderPluginBehaviorTest
@@ -91,6 +99,10 @@ class GroupFinderPluginBehaviorTest
 		// Make clientThread synchronous so invokeLater runs inline
 		doAnswer(inv -> { ((Runnable) inv.getArgument(0)).run(); return null; })
 			.when(mockClientThread).invokeLater(any(Runnable.class));
+
+		// Default mode: FRIENDS_CHAT so existing FC tests pass without per-test changes.
+		// Tests exercising MANUAL mode override this stub explicitly.
+		when(mockConfig.groupManagementMode()).thenReturn(GroupManagementMode.FRIENDS_CHAT);
 	}
 
 	private void inject(String fieldName, Object value) throws Exception
@@ -143,10 +155,9 @@ class GroupFinderPluginBehaviorTest
 		@Test
 		void whenNoFriendsChat_showsFcError()
 		{
-			// Arrange
+			// Arrange — FC mode (default), currentFcName is null (not in Friends Chat)
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(null);
 			GroupListing listing = GroupListingFixture.listing();
 
 			// Act
@@ -158,13 +169,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void normalizesNbspInPlayerName()
+		void normalizesNbspInPlayerName() throws Exception
 		{
 			// Arrange — player name contains non-breaking spaces (RuneLite encoding)
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Bob\u00A0Smith");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("OwnerFC");
+			inject("currentFcName", "OwnerFC");
 			GroupListing listing = new GroupListing();
 			listing.setActivity(Activity.OTHER);
 			listing.setMaxSize(4);
@@ -180,13 +190,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void normalizesNbspInFcOwnerName()
+		void normalizesNbspInFcOwnerName() throws Exception
 		{
-			// Arrange — FC owner name has non-breaking space
+			// Arrange — cached FC name has non-breaking space; createGroup must normalize it
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("FC\u00A0Owner");
+			inject("currentFcName", "FC\u00A0Owner");
 			GroupListing listing = new GroupListing();
 			listing.setActivity(Activity.OTHER);
 			listing.setMaxSize(4);
@@ -202,13 +211,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void whenApiSucceeds_panelIsRefreshed()
+		void whenApiSucceeds_panelIsRefreshed() throws Exception
 		{
 			// Arrange
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("AliceFC");
+			inject("currentFcName", "AliceFC");
 			GroupListing listing = GroupListingFixture.listing();
 			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
 			List<GroupListing> refreshed = List.of(GroupListingFixture.listing());
@@ -222,13 +230,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void whenApiFails_showsErrorAndDoesNotRefresh()
+		void whenApiFails_showsErrorAndDoesNotRefresh() throws Exception
 		{
 			// Arrange
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("AliceFC");
+			inject("currentFcName", "AliceFC");
 			GroupListing listing = GroupListingFixture.listing();
 			when(mockGroupFinderClient.createGroup(any())).thenReturn(null);
 
@@ -238,6 +245,89 @@ class GroupFinderPluginBehaviorTest
 			// Assert — error shown; panel must NOT be refreshed
 			verify(mockPanel).showError("Failed to create group");
 			verify(mockGroupFinderClient, never()).getGroups(any());
+		}
+
+		@Test
+		void whenManualMode_skipsFC_andCreatesGroupSuccessfully()
+		{
+			// Arrange — manual mode: no FC required even when FCM is null
+			when(mockConfig.groupManagementMode()).thenReturn(GroupManagementMode.MANUAL);
+			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
+			when(mockPlayer.getName()).thenReturn("Alice");
+			when(mockClient.getFriendsChatManager()).thenReturn(null);
+			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.createGroup(GroupListingFixture.listing());
+
+			// Assert — API was called (no early return due to missing FC)
+			verify(mockGroupFinderClient).createGroup(any());
+			verify(mockPanel, never()).showError(any());
+		}
+
+		@Test
+		void whenManualMode_doesNotSetFcName()
+		{
+			// Arrange — manual mode: FCM is present but must be ignored
+			when(mockConfig.groupManagementMode()).thenReturn(GroupManagementMode.MANUAL);
+			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
+			when(mockPlayer.getName()).thenReturn("Alice");
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getOwner()).thenReturn("SomeFcOwner");
+			GroupListing listing = new GroupListing();
+			listing.setActivity(Activity.OTHER);
+			listing.setMaxSize(4);
+			listing.setCurrentSize(1);
+			// friendsChatName not set on listing — starts as null
+			ArgumentCaptor<GroupListing> captor = ArgumentCaptor.forClass(GroupListing.class);
+			when(mockGroupFinderClient.createGroup(captor.capture())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.createGroup(listing);
+
+			// Assert — friendsChatName must remain null; FC owner must not be written
+			assertThat(captor.getValue().getFriendsChatName()).isNull();
+		}
+
+		@Test
+		void whenFcMode_setsActiveGroupIdOnSuccess() throws Exception
+		{
+			// Arrange — FC mode; API returns a listing with id "test-id"
+			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
+			when(mockPlayer.getName()).thenReturn("Alice");
+			inject("currentFcName", "AliceFC");
+			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.createGroup(GroupListingFixture.listing());
+
+			// Assert — activeGroupId is set to the returned listing's id
+			assertThat(plugin.getActiveGroupId()).isEqualTo(GroupListingFixture.listing().getId());
+		}
+
+		@Test
+		void whenManualMode_setsActiveGroupIdOnSuccess()
+		{
+			// Arrange — manual mode; API returns a listing with id "test-id"
+			when(mockConfig.groupManagementMode()).thenReturn(GroupManagementMode.MANUAL);
+			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
+			when(mockPlayer.getName()).thenReturn("Alice");
+			when(mockClient.getFriendsChatManager()).thenReturn(null);
+			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+			GroupListing listing = new GroupListing();
+			listing.setActivity(Activity.OTHER);
+			listing.setMaxSize(4);
+			listing.setCurrentSize(1);
+
+			// Act
+			plugin.createGroup(listing);
+
+			// Assert — activeGroupId is set even in manual mode
+			assertThat(plugin.getActiveGroupId()).isEqualTo(GroupListingFixture.listing().getId());
 		}
 	}
 
@@ -249,9 +339,10 @@ class GroupFinderPluginBehaviorTest
 	class DeleteGroup
 	{
 		@Test
-		void whenApiSucceeds_panelIsRefreshed()
+		void whenApiSucceeds_panelIsRefreshed() throws Exception
 		{
 			// Arrange
+			inject("activeGroupId", "test-id");
 			when(mockGroupFinderClient.deleteGroup("test-id")).thenReturn(true);
 			List<GroupListing> refreshed = List.of(GroupListingFixture.listing());
 			when(mockGroupFinderClient.getGroups(any())).thenReturn(refreshed);
@@ -259,8 +350,9 @@ class GroupFinderPluginBehaviorTest
 			// Act
 			plugin.deleteGroup("test-id");
 
-			// Assert
+			// Assert — panel refreshed and activeGroupId cleared
 			verify(mockPanel).updateListings(refreshed);
+			assertThat(plugin.getActiveGroupId()).isNull();
 		}
 
 		@Test
@@ -630,6 +722,113 @@ class GroupFinderPluginBehaviorTest
 
 			// Assert — returned name uses regular ASCII space
 			assertThat(result).isEqualTo("Bob Smith");
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// FC member auto-update (onFriendsChatMemberJoined / onFriendsChatMemberLeft)
+	// -------------------------------------------------------------------------
+
+	@Nested
+	class FcMemberAutoUpdate
+	{
+		@Test
+		void whenFcModeAndActiveGroup_memberJoined_updatesGroupSize() throws Exception
+		{
+			// Arrange
+			inject("activeGroupId", "group-abc");
+			inject("activeGroupMaxSize", 10);
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[3]);
+			when(mockGroupFinderClient.updateGroup(eq("group-abc"), any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.onFriendsChatMemberJoined(mock(FriendsChatMemberJoined.class));
+			SwingUtilities.invokeAndWait(() -> {});
+
+			// Assert — updateGroup called with the new member count of 3
+			verify(mockGroupFinderClient).updateGroup(
+				eq("group-abc"),
+				argThat((Map<String, Object> m) -> Integer.valueOf(3).equals(m.get("currentSize")))
+			);
+		}
+
+		@Test
+		void whenFcModeAndActiveGroup_memberLeft_updatesGroupSize() throws Exception
+		{
+			// Arrange
+			inject("activeGroupId", "group-abc");
+			inject("activeGroupMaxSize", 10);
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[2]);
+			when(mockGroupFinderClient.updateGroup(eq("group-abc"), any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.onFriendsChatMemberLeft(mock(FriendsChatMemberLeft.class));
+			SwingUtilities.invokeAndWait(() -> {});
+
+			// Assert — updateGroup called with the new member count of 2
+			verify(mockGroupFinderClient).updateGroup(
+				eq("group-abc"),
+				argThat((Map<String, Object> m) -> Integer.valueOf(2).equals(m.get("currentSize")))
+			);
+		}
+
+		@Test
+		void whenManualMode_memberJoined_doesNotUpdate() throws Exception
+		{
+			// Arrange — manual mode: FC member events must not trigger group size updates
+			when(mockConfig.groupManagementMode()).thenReturn(GroupManagementMode.MANUAL);
+			inject("activeGroupId", "group-abc");
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[3]);
+
+			// Act
+			plugin.onFriendsChatMemberJoined(mock(FriendsChatMemberJoined.class));
+			SwingUtilities.invokeAndWait(() -> {});
+
+			// Assert — no update sent in manual mode
+			verify(mockGroupFinderClient, never()).updateGroup(any(), any());
+		}
+
+		@Test
+		void whenFcCountExceedsGroupMaxSize_autoUpdateClampsToMaxSize() throws Exception
+		{
+			// Arrange — FC has 8 members but the group cap is 5
+			inject("activeGroupId", "group-abc");
+			inject("activeGroupMaxSize", 5);
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[8]);
+			when(mockGroupFinderClient.updateGroup(eq("group-abc"), any())).thenReturn(GroupListingFixture.listing());
+			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
+
+			// Act
+			plugin.onFriendsChatMemberJoined(mock(FriendsChatMemberJoined.class));
+			SwingUtilities.invokeAndWait(() -> {});
+
+			// Assert — currentSize must not exceed the group's maxSize
+			verify(mockGroupFinderClient).updateGroup(
+				eq("group-abc"),
+				argThat((Map<String, Object> m) -> Integer.valueOf(5).equals(m.get("currentSize")))
+			);
+		}
+
+		@Test
+		void whenNoActiveGroup_memberJoined_doesNotUpdate() throws Exception
+		{
+			// Arrange — FC mode but no active group (activeGroupId is null)
+			// activeGroupId not injected → remains null from setUp
+			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
+			when(mockFcm.getMembers()).thenReturn(new FriendsChatMember[3]);
+
+			// Act
+			plugin.onFriendsChatMemberJoined(mock(FriendsChatMemberJoined.class));
+			SwingUtilities.invokeAndWait(() -> {});
+
+			// Assert — no update sent when there is no active group to update
+			verify(mockGroupFinderClient, never()).updateGroup(any(), any());
 		}
 	}
 }
