@@ -49,7 +49,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
-import net.runelite.client.config.ConfigChanged;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
