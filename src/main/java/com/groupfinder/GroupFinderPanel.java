@@ -363,14 +363,16 @@ public class GroupFinderPanel extends PluginPanel implements GroupFinderPanelVie
 		JComboBox<Activity> activityBox = new JComboBox<>(Activity.values());
 		formPanel.add(activityBox);
 
+		int fcCount = fcMode ? Math.min(100, Math.max(1, plugin.getCurrentFcMemberCount())) : 1;
+		int maxDefault = fcMode ? Math.max(4, fcCount) : 4;
+
 		formPanel.add(new JLabel("Max Size:"));
-		JSpinner maxSizeSpinner = new JSpinner(new SpinnerNumberModel(4, 2, 100, 1));
+		JSpinner maxSizeSpinner = new JSpinner(new SpinnerNumberModel(maxDefault, 2, 100, 1));
 		formPanel.add(maxSizeSpinner);
 
 		formPanel.add(new JLabel("Current Size:"));
 		if (fcMode)
 		{
-			int fcCount = Math.max(1, plugin.getCurrentFcMemberCount());
 			currentSizeSpinner = new JSpinner(new SpinnerNumberModel(fcCount, 1, 100, 1));
 			currentSizeSpinner.setEnabled(false);
 

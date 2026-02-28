@@ -201,13 +201,12 @@ public class GroupFinderPlugin extends Plugin
 
 		if (config.groupManagementMode() == GroupManagementMode.FRIENDS_CHAT)
 		{
-			FriendsChatManager fcm = client.getFriendsChatManager();
-			if (fcm == null)
+			if (currentFcName == null)
 			{
 				panel.showError("Join a Friends Chat before creating a group");
 				return;
 			}
-			listing.setFriendsChatName(normalizeName(fcm.getOwner()));
+			listing.setFriendsChatName(normalizeName(currentFcName));
 		}
 
 		executorService.execute(() ->
@@ -465,7 +464,8 @@ public class GroupFinderPlugin extends Plugin
 	{
 		if (config.groupManagementMode() == GroupManagementMode.FRIENDS_CHAT && activeGroupId != null)
 		{
-			updateGroupSize(activeGroupId, currentFcMemberCount);
+			int size = Math.min(100, Math.max(1, currentFcMemberCount));
+			updateGroupSize(activeGroupId, size);
 		}
 	}
 

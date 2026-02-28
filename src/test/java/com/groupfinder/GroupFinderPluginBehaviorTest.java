@@ -155,10 +155,9 @@ class GroupFinderPluginBehaviorTest
 		@Test
 		void whenNoFriendsChat_showsFcError()
 		{
-			// Arrange — FC mode (default), but player is not in a Friends Chat
+			// Arrange — FC mode (default), currentFcName is null (not in Friends Chat)
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(null);
 			GroupListing listing = GroupListingFixture.listing();
 
 			// Act
@@ -170,13 +169,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void normalizesNbspInPlayerName()
+		void normalizesNbspInPlayerName() throws Exception
 		{
 			// Arrange — player name contains non-breaking spaces (RuneLite encoding)
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Bob\u00A0Smith");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("OwnerFC");
+			inject("currentFcName", "OwnerFC");
 			GroupListing listing = new GroupListing();
 			listing.setActivity(Activity.OTHER);
 			listing.setMaxSize(4);
@@ -192,13 +190,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void normalizesNbspInFcOwnerName()
+		void normalizesNbspInFcOwnerName() throws Exception
 		{
-			// Arrange — FC owner name has non-breaking space
+			// Arrange — cached FC name has non-breaking space; createGroup must normalize it
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("FC\u00A0Owner");
+			inject("currentFcName", "FC\u00A0Owner");
 			GroupListing listing = new GroupListing();
 			listing.setActivity(Activity.OTHER);
 			listing.setMaxSize(4);
@@ -214,13 +211,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void whenApiSucceeds_panelIsRefreshed()
+		void whenApiSucceeds_panelIsRefreshed() throws Exception
 		{
 			// Arrange
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("AliceFC");
+			inject("currentFcName", "AliceFC");
 			GroupListing listing = GroupListingFixture.listing();
 			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
 			List<GroupListing> refreshed = List.of(GroupListingFixture.listing());
@@ -234,13 +230,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void whenApiFails_showsErrorAndDoesNotRefresh()
+		void whenApiFails_showsErrorAndDoesNotRefresh() throws Exception
 		{
 			// Arrange
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("AliceFC");
+			inject("currentFcName", "AliceFC");
 			GroupListing listing = GroupListingFixture.listing();
 			when(mockGroupFinderClient.createGroup(any())).thenReturn(null);
 
@@ -297,13 +292,12 @@ class GroupFinderPluginBehaviorTest
 		}
 
 		@Test
-		void whenFcMode_setsActiveGroupIdOnSuccess()
+		void whenFcMode_setsActiveGroupIdOnSuccess() throws Exception
 		{
 			// Arrange — FC mode; API returns a listing with id "test-id"
 			when(mockClient.getLocalPlayer()).thenReturn(mockPlayer);
 			when(mockPlayer.getName()).thenReturn("Alice");
-			when(mockClient.getFriendsChatManager()).thenReturn(mockFcm);
-			when(mockFcm.getOwner()).thenReturn("AliceFC");
+			inject("currentFcName", "AliceFC");
 			when(mockGroupFinderClient.createGroup(any())).thenReturn(GroupListingFixture.listing());
 			when(mockGroupFinderClient.getGroups(any())).thenReturn(Collections.emptyList());
 
